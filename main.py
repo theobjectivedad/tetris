@@ -1,340 +1,345 @@
-"""Terminal Tetris — a curses-based Tetris game."""
+"""Terminal Tetris — curses UI for the game logic in game.py."""
 
 from __future__ import annotations
 
 import curses
-import random
-from dataclasses import dataclass, field
+import time
 
-BOARD_W = 10
-BOARD_H = 20
+from game import (
+    BOARD_H,
+    BOARD_W,
+    PIECES,
+    HighScores,
+    Tetris,
+)
 
-# Piece definitions: list of rotation states, each a list of (x, y) offsets
-PIECES: dict[str, list[list[tuple[int, int]]]] = {
-    "I": [
-        [(0, 0), (1, 0), (2, 0), (3, 0)],
-        [(2, 0), (2, 1), (2, 2), (2, 3)],
-        [(0, 0), (1, 0), (2, 0), (3, 0)],
-        [(1, 0), (1, 1), (1, 2), (1, 3)],
-    ],
-    "O": [
-        [(0, 0), (1, 0), (0, 1), (1, 1)],
-        [(0, 0), (1, 0), (0, 1), (1, 1)],
-        [(0, 0), (1, 0), (0, 1), (1, 1)],
-        [(0, 0), (1, 0), (0, 1), (1, 1)],
-    ],
-    "T": [
-        [(1, 0), (0, 1), (1, 1), (2, 1)],
-        [(1, 0), (1, 1), (2, 1), (1, 2)],
-        [(0, 1), (1, 1), (2, 1), (1, 2)],
-        [(1, 0), (0, 1), (1, 1), (1, 2)],
-    ],
-    "S": [
-        [(1, 0), (2, 0), (0, 1), (1, 1)],
-        [(1, 0), (1, 1), (2, 1), (2, 2)],
-        [(1, 0), (2, 0), (0, 1), (1, 1)],
-        [(1, 0), (1, 1), (2, 1), (2, 2)],
-    ],
-    "Z": [
-        [(0, 0), (1, 0), (1, 1), (2, 1)],
-        [(2, 0), (1, 1), (2, 1), (1, 2)],
-        [(0, 0), (1, 0), (1, 1), (2, 1)],
-        [(2, 0), (1, 1), (2, 1), (1, 2)],
-    ],
-    "J": [
-        [(0, 0), (0, 1), (1, 1), (2, 1)],
-        [(1, 0), (2, 0), (1, 1), (1, 2)],
-        [(0, 1), (1, 1), (2, 1), (2, 2)],
-        [(1, 0), (1, 1), (0, 2), (1, 2)],
-    ],
-    "L": [
-        [(2, 0), (0, 1), (1, 1), (2, 1)],
-        [(1, 0), (1, 1), (1, 2), (2, 2)],
-        [(0, 1), (0, 2), (1, 2), (2, 2)],
-        [(0, 0), (1, 0), (1, 1), (1, 2)],
-    ],
-}
+# Colors: pair index -> piece kind
+COLORS: dict[str, int] = {"I": 1, "O": 2, "T": 3, "S": 4, "Z": 5, "J": 6, "L": 7}
 
-# A color pair per piece, index 0 = empty
-COLORS: dict[str, int] = {
-    "I": 1, "O": 2, "T": 3, "S": 4, "Z": 5, "J": 6, "L": 7,
-}
-
-
-@dataclass
-class Piece:
-    kind: str
-    x: int
-    y: int
-    rot: int = 0
-
-    def cells(self) -> list[tuple[int, int]]:
-        return [(self.x + dx, self.y + dy) for dx, dy in PIECES[self.kind][self.rot]]
-
-    def cells_at_rot(self, rot: int) -> list[tuple[int, int]]:
-        return [(self.x + dx, self.y + dy) for dx, dy in PIECES[self.kind][rot]]
-
-
-class Tetris:
-    def __init__(self) -> None:
-        self.bag: list[str] = []
-        self.score = 0
-        self.lines = 0
-        self.level = 1
-        self.next_kind = self._refill()
-        self.board: list[list[str]] = [[""] * BOARD_W for _ in range(BOARD_H)]
-        self.game_over = False
-        self.paused = False
-        self.drop_interval = 0.5
-        self.piece = self._spawn()
-
-    def _refill(self) -> str:
-        if not self.bag:
-            self.bag = list(PIECES.keys())
-            random.shuffle(self.bag)
-        return self.bag.pop()
-
-    def _spawn(self) -> Piece:
-        kind = self.next_kind
-        self.next_kind = self._refill()
-        piece = Piece(kind=kind, x=BOARD_W // 2 - 2, y=0)
-        if self._collides(piece):
-            self.game_over = True
-        return piece
-
-    def _collides(self, piece: Piece, rot: int | None = None) -> bool:
-        cells = piece.cells_at_rot(rot) if rot is not None else piece.cells()
-        for cx, cy in cells:
-            if cx < 0 or cx >= BOARD_W or cy >= BOARD_H:
-                return True
-            if cy >= 0 and self.board[cy][cx]:
-                return True
-        return False
-
-    def _collides_at_rot(self, piece: Piece, rot: int) -> bool:
-        return self._collides(piece, rot)
-
-    def move(self, dx: int) -> None:
-        p = Piece(self.piece.kind, self.piece.x + dx, self.piece.y, self.piece.rot)
-        if not self._collides(p):
-            self.piece = p
-
-    def rotate(self) -> None:
-        p = self.piece
-        new_rot = (p.rot + 1) % 4
-        # Try wall kicks: straight, left 1, left 2, right 1, right 2
-        for dx in (0, -1, 1, -2, 2):
-            q = Piece(p.kind, p.x + dx, p.y, new_rot)
-            if not self._collides_at_rot(q, new_rot):
-                self.piece = q
-                return
-
-    def soft_drop(self) -> None:
-        self.move_down()
-
-    def hard_drop(self) -> None:
-        p = self.piece
-        while not self._collides_at_rot(Piece(p.kind, p.x, p.y + 1, p.rot), p.rot):
-            p = Piece(p.kind, p.x, p.y + 1, p.rot)
-        self.piece = p
-        self._lock()
-
-    def move_down(self) -> None:
-        p = self.piece
-        q = Piece(p.kind, p.x, p.y + 1, p.rot)
-        if not self._collides(q):
-            self.piece = q
-        else:
-            self._lock()
-
-    def _lock(self) -> None:
-        for cx, cy in self.piece.cells():
-            if cy < 0:
-                self.game_over = True
-                continue
-            self.board[cy][cx] = self.piece.kind
-        self._clear_lines()
-        self.piece = self._spawn()
-
-    def _clear_lines(self) -> None:
-        new_board = [row for row in self.board if any(c == "" for c in row)]
-        cleared = BOARD_H - len(new_board)
-        if cleared:
-            points = [0, 100, 300, 500, 800][cleared] * self.level
-            self.score += points
-            self.lines += cleared
-            self.level = self.lines // 10 + 1
-            self.drop_interval = max(0.05, 0.5 * (0.8 ** (self.level - 1)))
-            while len(new_board) < BOARD_H:
-                new_board.insert(0, [""] * BOARD_W)
-            self.board = new_board
-
-    def ghost_y(self) -> int:
-        p = self.piece
-        gy = p.y
-        while not self._collides_at_rot(Piece(p.kind, p.x, gy + 1, p.rot), p.rot):
-            gy += 1
-        return gy
+# DAS (Delayed Auto Shift) tuning
+DAS_DELAY = 0.17   # seconds before auto-repeat kicks in
+ARR_RATE = 0.045   # auto-repeat interval
+ROTATE_COOLDOWN = 0.12
+FRAME = 0.02       # main loop frame time (50 fps)
 
 
 def init_colors() -> None:
+    if not curses.has_colors():
+        return
+    curses.start_color()
     pairs = {
-        1: (curses.COLOR_CYAN, curses.COLOR_BLACK),
-        2: (curses.COLOR_YELLOW, curses.COLOR_BLACK),
-        3: (curses.COLOR_MAGENTA, curses.COLOR_BLACK),
-        4: (curses.COLOR_GREEN, curses.COLOR_BLACK),
-        5: (curses.COLOR_RED, curses.COLOR_BLACK),
-        6: (curses.COLOR_BLUE, curses.COLOR_BLACK),
-        7: (curses.COLOR_WHITE, curses.COLOR_BLACK),
+        1: curses.COLOR_CYAN,
+        2: curses.COLOR_YELLOW,
+        3: curses.COLOR_MAGENTA,
+        4: curses.COLOR_GREEN,
+        5: curses.COLOR_RED,
+        6: curses.COLOR_BLUE,
+        7: curses.COLOR_WHITE,
+        8: curses.COLOR_WHITE,   # text
+        9: curses.COLOR_YELLOW,  # highlights
+        10: curses.COLOR_BLACK,  # flash (with white bg)
     }
-    if curses.has_colors():
-        curses.start_color()
-        for i, (fg, bg) in pairs.items():
-            curses.init_pair(i, fg, bg)
-        curses.init_pair(8, curses.COLOR_WHITE, curses.COLOR_BLACK)
-        curses.init_pair(9, curses.COLOR_YELLOW, curses.COLOR_BLACK)
+    for i, fg in pairs.items():
+        if i == 10:
+            curses.init_pair(i, curses.COLOR_WHITE, curses.COLOR_YELLOW)
+        else:
+            curses.init_pair(i, fg, curses.COLOR_BLACK)
+
+
+def cell_attr(kind: str) -> int:
+    return curses.color_pair(COLORS[kind]) if curses.has_colors() else 0
+
+
+def draw_box(stdscr: curses.window, title: str, bx: int, by: int, w: int) -> None:
+    """Draw a titled box; returns (inner_x, inner_y)."""
+    border = f"┌{'─' * (w - 2)}┐"
+    try:
+        stdscr.addstr(by, bx, border, curses.A_DIM)
+        stdscr.addstr(by + 1, bx, f"│ {title:<{w - 4}} │", curses.A_DIM)
+        for i in range(3):
+            stdscr.addstr(by + 2 + i, bx, f"│{' ' * (w - 2)}│", curses.A_DIM)
+        stdscr.addstr(by + 5, bx, f"└{'─' * (w - 2)}┘", curses.A_DIM)
+    except curses.error:
+        pass
+    return bx + 2, by + 2
+
+
+def draw_piece_preview(stdscr: curses.window, kind: str, ix: int, iy: int, dim: bool = False) -> None:
+    if kind not in PIECES:
+        return
+    cells = PIECES[kind][0]
+    xs = [x for x, _ in cells]
+    ys = [y for _, y in cells]
+    top, bottom, left, right = min(ys), max(ys), min(xs), max(xs)
+    width = (right - left + 1) * 3 - 1
+    ox = ix + (5 - width) // 2
+    for y in range(top, bottom + 1):
+        for x in range(left, right + 1):
+            if (x, y) in cells:
+                txt = "██"
+                try:
+                    if dim:
+                        stdscr.addstr(iy + (y - top), ox + (x - left) * 3, txt, curses.A_DIM)
+                    else:
+                        stdscr.addstr(iy + (y - top), ox + (x - left) * 3, txt, cell_attr(kind))
+                except curses.error:
+                    pass
 
 
 def draw_board(stdscr: curses.window, t: Tetris, bx: int, by: int) -> None:
-    # border
     try:
-        stdscr.addstr(by, bx, "█" * (BOARD_W * 2 + 1), curses.A_DIM if curses.has_colors() else 0)
+        stdscr.addstr(by, bx, "█" * (BOARD_W * 2 + 1), curses.A_DIM)
     except curses.error:
         pass
+
+    flash_rows = set(t.pending_clears)
+    ghost_cells: set[tuple[int, int]] = set()
+    live_cells: dict[tuple[int, int], str] = {}
+    if not t.game_over:
+        ghost_cells = {
+            (dx + t.piece.x, t.ghost_y() + dy) for dx, dy in PIECES[t.piece.kind][t.piece.rot]
+        }
+        live_cells = {(x, y): t.piece.kind for x, y in t.piece.cells() if y >= 0}
+
     for y in range(BOARD_H):
-        row_cells: list[str] = []
-        row_colors: dict[int, int] = {}
+        row = t.board[y]
+        line_parts: list[tuple[str, int | None]] = []
         for x in range(BOARD_W):
-            kind = t.board[y][x]
-            row_cells.append("██" if kind else "  ")
-            if kind:
-                row_colors[x * 2] = COLORS[kind]
-        # ghost + active piece
-        if not t.game_over:
-            ghost_cells = {
-                (dx + t.piece.x, t.ghost_y() + dy)
-                for dx, dy in PIECES[t.piece.kind][t.piece.rot]
-            }
-            for cx, cy in ghost_cells:
-                if 0 <= cy < BOARD_H and 0 <= cx < BOARD_W and not t.board[cy][cx]:
-                    row_cells[cx] = "▒▒"
-                    row_colors[cx * 2] = -1
-            for cx, cy in t.piece.cells():
-                if 0 <= cy < BOARD_H and 0 <= cx < BOARD_W:
-                    row_cells[cx] = "██"
-                    row_colors[cx * 2] = COLORS[t.piece.kind]
-        line = " ".join(row_cells)
-        for col, attr in row_colors.items():
-            if attr == -1:
-                stdscr.addstr(by + y + 1, bx + col, row_cells[col], curses.A_DIM)
-            elif curses.has_colors():
-                stdscr.addstr(by + y + 1, bx + col, row_cells[col], curses.color_pair(attr))
+            kind = row[x]
+            if (x, y) in live_cells:
+                line_parts.append(("██", cell_attr(live_cells[(x, y)])))
+            elif kind:
+                line_parts.append(("██", curses.color_pair(10) if y in flash_rows and curses.has_colors() else cell_attr(kind)))
+            elif (x, y) in ghost_cells:
+                line_parts.append(("▒▒", curses.A_DIM))
             else:
-                stdscr.addstr(by + y + 1, bx + col, row_cells[col])
-        if not row_colors:
-            stdscr.addstr(by + y + 1, bx, line)
+                line_parts.append(("  ", None))
+
+        x_cursor = bx
+        for text, attr in line_parts:
+            if text != "  ":
+                try:
+                    if attr is None:
+                        stdscr.addstr(by + y + 1, x_cursor, text)
+                    else:
+                        stdscr.addstr(by + y + 1, x_cursor, text, attr)
+                except curses.error:
+                    pass
+            x_cursor += 3  # 2 cells + 1 separator
+
+        if y in flash_rows:
+            try:
+                stdscr.addstr(by + y + 1, bx, "█" * (BOARD_W * 2 + 1), curses.A_BLINK)
+            except curses.error:
+                pass
 
 
-def draw_sidebar(stdscr: curses.window, t: Tetris, bx: int, by: int) -> None:
-    sx = bx + BOARD_W * 2 + 5
-    info = [
-        ("NEXT", ""),
-        *next_piece_rows(t.next_kind),
-        ("", ""),
-        ("SCORE", str(t.score)),
+def draw_sidebar(stdscr: curses.window, t: Tetris, hs: HighScores, by: int, sx: int, new_best: bool) -> None:
+    hold_x, hold_y = draw_box(stdscr, "HOLD", sx, by, 8)
+    draw_piece_preview(stdscr, t.holding or "", hold_x, hold_y, dim=not t.can_hold)
+
+    next_x, next_y = draw_box(stdscr, "NEXT", sx, by + 7, 8)
+    draw_piece_preview(stdscr, t.next_kind, next_x, next_y)
+
+    stats = [
+        ("SCORE", f"{t.score:,}"),
+        ("BEST", f"{hs.best():,}"),
         ("LINES", str(t.lines)),
         ("LEVEL", str(t.level)),
-        ("", ""),
-        ("←/→ move", "↑ rotate"),
-        ("↓ soft drop", "SPACE hard drop"),
-        ("P pause", "Q quit"),
+        ("COMBO", str(t.combo) if t.combo > 0 else "—"),
+        ("B2B", "✓" if t.b2b else "—"),
     ]
-    for i, (label, value) in enumerate(info):
-        line = f"{label:<10}{value}"
+    for i, (label, value) in enumerate(stats):
         try:
-            if curses.has_colors():
-                stdscr.addstr(by + i, sx, line, curses.color_pair(8))
-            else:
-                stdscr.addstr(by + i, sx, line)
+            stdscr.addstr(by + 16 + i, sx, f"{label:<7}{value}", curses.color_pair(8))
+        except curses.error:
+            pass
+
+    controls = [
+        "←/→  move",
+        "↑/Z  rotate",
+        "↓    soft drop",
+        "SPACE hard drop",
+        "C    hold",
+        "P    pause",
+        "Q    quit",
+    ]
+    for i, line in enumerate(controls):
+        try:
+            stdscr.addstr(by + 24 + i, sx, line, curses.A_DIM)
+        except curses.error:
+            pass
+
+    if new_best:
+        try:
+            stdscr.addstr(by + 32, sx, "★ NEW BEST ★", curses.A_REVERSE)
         except curses.error:
             pass
 
 
-def next_piece_rows(kind: str) -> list[tuple[str, str]]:
-    cells = PIECES[kind][0]
-    ys = [cy for _, cy in cells]
-    xs = [cx for cx, _ in cells]
-    top, bottom = min(ys), max(ys)
-    left, right = min(xs), max(xs)
-    rows: list[tuple[str, str]] = []
-    for y in range(top, bottom + 1):
-        line = ""
-        for x in range(left, right + 1):
-            line += "██ " if (x, y) in cells else "   "
-        rows.append(("", line))
-    return rows
+def draw_game_over(stdscr: curses.window, t: Tetris, hs: HighScores, elapsed: float, rank: int | None, bx: int, by: int) -> None:
+    board_w = BOARD_W * 2 + 1
+    lines = [
+        "GAME OVER",
+        "",
+        f"Score:  {t.score:,}",
+        f"Lines:  {t.lines}    Level: {t.level}",
+        f"Time:   {int(elapsed // 60):02d}:{int(elapsed % 60):02d}    Pieces: {t.pieces}",
+    ]
+    if rank is not None:
+        lines.append(f"★ New high score: #{rank + 1} ★")
+    else:
+        lines.append(f"Best:   {hs.best():,}")
+    lines += ["", "R — play again    Q — quit"]
+
+    # darkening overlay behind the message (drawn first, text on top)
+    for y in range(BOARD_H):
+        try:
+            stdscr.addstr(by + y + 1, bx, " " * board_w)
+        except curses.error:
+            pass
+
+    start_y = by + BOARD_H // 2 - len(lines) // 2
+    for i, line in enumerate(lines):
+        try:
+            attr = curses.A_REVERSE if line == "GAME OVER" else (
+                curses.color_pair(9) if "★" in line else 0
+            )
+            stdscr.addstr(start_y + i, bx + max(0, (board_w - len(line)) // 2), line, attr)
+        except curses.error:
+            pass
 
 
 def game_loop(stdscr: curses.window) -> None:
     curses.curs_set(0)
     stdscr.nodelay(True)
-    if curses.has_colors():
-        init_colors()
     stdscr.keypad(True)
+    init_colors()
 
-    import time
+    hs = HighScores()
     t = Tetris()
-    last_drop = time.monotonic()
+    new_best = False
+    rank: int | None = None
+    start_time = time.monotonic()
+
+    # DAS state
+    held_dir = 0
+    held_since = 0.0
+    last_move = 0.0
+    last_rotate = 0.0
+    last_grav = 0.0
+
+    def reset_game() -> None:
+        nonlocal t, new_best, rank, start_time, held_dir, last_move, last_grav
+        t = Tetris()
+        new_best = False
+        rank = None
+        start_time = time.monotonic()
+        held_dir = 0
+        last_move = 0.0
+        last_grav = 0.0
 
     while True:
-        # input
+        now = time.monotonic()
+
+        # ---- input -------------------------------------------------
         key = stdscr.getch()
         if key in (ord("q"), ord("Q")):
-            return
-        if key in (ord("p"), ord("P")):
+            break
+        if key in (ord("r"), ord("R")) and t.game_over:
+            reset_game()
+        elif key in (ord("p"), ord("P")):
             t.paused = not t.paused
         elif not t.paused and not t.game_over:
             if key == curses.KEY_LEFT:
-                t.move(-1)
+                if held_dir != -1:
+                    held_dir, held_since = -1, now
+                    t.move(-1)
+                    last_move = now
             elif key == curses.KEY_RIGHT:
-                t.move(1)
+                if held_dir != 1:
+                    held_dir, held_since = 1, now
+                    t.move(1)
+                    last_move = now
             elif key == curses.KEY_UP:
-                t.rotate()
+                if now - last_rotate >= ROTATE_COOLDOWN:
+                    t.rotate(1)
+                    last_rotate = now
+            elif key in (ord("z"), ord("Z")):
+                if now - last_rotate >= ROTATE_COOLDOWN:
+                    t.rotate(-1)
+                    last_rotate = now
             elif key == curses.KEY_DOWN:
                 t.soft_drop()
-                last_drop = time.monotonic()
             elif key == ord(" "):
                 t.hard_drop()
-                last_drop = time.monotonic()
+            elif key in (ord("c"), ord("C")):
+                t.hold()
 
-        # gravity
-        now = time.monotonic()
-        if not t.paused and not t.game_over and now - last_drop >= t.drop_interval:
-            t.move_down()
-            last_drop = now
+        # ---- DAS auto-repeat ----------------------------------------
+        if (
+            held_dir
+            and now - held_since >= DAS_DELAY
+            and now - last_move >= ARR_RATE
+            and not t.paused
+            and not t.game_over
+        ):
+            t.move(held_dir)
+            last_move = now
 
-        # draw
-        stdscr.erase()
-        bx, by = 2, 2
-        draw_board(stdscr, t, bx, by)
-        draw_sidebar(stdscr, t, bx, by)
-        if t.game_over:
-            msg = " GAME OVER — press Q to quit "
+        # ---- gravity --------------------------------------------------
+        if not t.paused and not t.game_over and not t.frozen:
+            if now - last_grav >= t.drop_interval:
+                t.tick()
+                last_grav = now
+
+        # ---- flash animation ------------------------------------------
+        if t.frozen:
+            clear_count = len(t.pending_clears)
+            finished = t.advance_flash()
+            if finished and clear_count >= 4:
+                try:
+                    curses.beep()  # little fanfare for a Tetris
+                except curses.error:
+                    pass
+
+        # ---- game over ---------------------------------------------------
+        if t.game_over and not new_best and rank is None and t.score > 0:
+            rank = hs.record(t.score, t.lines, t.level)
+            if rank is not None:
+                new_best = True
+
+        # ---- draw ----------------------------------------------------
+        max_y, max_x = stdscr.getmaxyx()
+        board_w = BOARD_W * 2 + 1
+        sidebar_x_offset = board_w + 4
+        total_w = sidebar_x_offset + 16
+        if max_x < total_w + 4 or max_y < BOARD_H + 6:
+            stdscr.erase()
             try:
-                stdscr.addstr(
-                    BOARD_H // 2 + by, bx + BOARD_W - 6, msg,
-                    curses.A_REVERSE | (curses.color_pair(9) if curses.has_colors() else 0),
-                )
+                stdscr.addstr(1, 1, f"Terminal too small — need {total_w + 4}×{BOARD_H + 6}, got {max_x}×{max_y}")
             except curses.error:
                 pass
+            stdscr.refresh()
+            time.sleep(FRAME)
+            continue
+
+        bx = max(0, (max_x - total_w) // 2)
+        by = max(1, (max_y - (BOARD_H + 5)) // 2)
+
+        stdscr.erase()
+        draw_board(stdscr, t, bx, by)
+        draw_sidebar(stdscr, t, hs, by, bx + sidebar_x_offset, new_best)
+        if t.game_over:
+            draw_game_over(stdscr, t, hs, time.monotonic() - start_time, rank, bx, by)
         elif t.paused:
             try:
-                stdscr.addstr(BOARD_H // 2 + by, bx + 2, " PAUSED ", curses.A_REVERSE)
+                stdscr.addstr(by + BOARD_H // 2, bx + 2, " PAUSED ", curses.A_REVERSE)
             except curses.error:
                 pass
         stdscr.refresh()
 
-        time.sleep(0.02)
+        time.sleep(FRAME)
 
 
 def main() -> None:

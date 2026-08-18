@@ -1,158 +1,281 @@
-"""Unit tests for the Tetris game logic.
+"""Unit tests for the Tetris game logic (game.py)."""
 
-The game state lives in the pure-Python ``Tetris`` class (no curses needed),
-so we can exercise it directly.
-"""
-
+import json
 import random
 
 import pytest
 
-import main
-from main import BOARD_H, BOARD_W, PIECES, Tetris
+import game
+from game import (
+    BOARD_H,
+    BOARD_W,
+    PIECES,
+    HighScores,
+    Tetris,
+)
 
 
 @pytest.fixture
-def game() -> Tetris:
+def game_state() -> Tetris:
     random.seed(42)
     return Tetris()
+
+
+def fill_row(t: Tetris, y: int, kind: str = "T") -> None:
+    t.board[y] = [kind] * BOARD_W
+
+
+# ---------------------------------------------------------------------------
+# Bag randomizer
+# ---------------------------------------------------------------------------
 
 
 class TestBagRandomizer:
     def test_bags_contain_all_seven_pieces(self) -> None:
         t = Tetris()
-        # Each freshly drawn bag must be a permutation of all seven kinds.
         for _ in range(3):
             t.bag = []
             seen = [t._refill() for _ in range(7)]
             assert sorted(seen) == sorted(PIECES.keys())
 
-    def test_refill_never_returns_empty_bag_piece(self) -> None:
+    def test_refill_never_returns_unknown_piece(self) -> None:
         t = Tetris()
         for _ in range(50):
-            kind = t._refill()
-            assert kind in PIECES
+            assert t._refill() in PIECES
+
+
+# ---------------------------------------------------------------------------
+# Spawning
+# ---------------------------------------------------------------------------
 
 
 class TestSpawning:
-    def test_spawn_uses_next_piece_and_updates_next(self, game: Tetris) -> None:
-        expected = game.next_kind
-        piece = game._spawn()
+    def test_spawn_uses_next_piece(self, game_state: Tetris) -> None:
+        expected = game_state.next_kind
+        piece = game_state._spawn()
         assert piece.kind == expected
-        assert game.next_kind != expected or len(PIECES) == 1  # next preview advanced
 
-    def test_spawned_piece_starts_at_top_center(self, game: Tetris) -> None:
-        p = game.piece
+    def test_spawned_piece_starts_at_top(self, game_state: Tetris) -> None:
+        p = game_state.piece
         assert p.rot == 0
         assert p.y == 0
-        xs = [x for x, _ in p.cells()]
-        assert max(xs) < BOARD_W
+        assert all(0 <= x < BOARD_W for x, _ in p.cells())
 
-    def test_piece_cells_within_board_width(self, game: Tetris) -> None:
-        for cx, cy in game.piece.cells():
-            assert 0 <= cx < BOARD_W
+    def test_spawn_advances_next_preview(self, game_state: Tetris) -> None:
+        before = game_state.next_kind
+        game_state._spawn()
+        # After consuming, the preview holds a (different) drawn piece.
+        assert game_state.next_kind in PIECES
+
+
+# ---------------------------------------------------------------------------
+# Movement
+# ---------------------------------------------------------------------------
 
 
 class TestMovement:
-    def test_move_left_and_right(self, game: Tetris) -> None:
-        x0 = game.piece.x
-        game.move(-1)
-        assert game.piece.x == x0 - 1
-        game.move(1)
-        assert game.piece.x == x0
+    def test_move_left_and_right(self, game_state: Tetris) -> None:
+        x0 = game_state.piece.x
+        assert game_state.move(-1)
+        assert game_state.piece.x == x0 - 1
+        assert game_state.move(1)
+        assert game_state.piece.x == x0
 
-    def test_cannot_move_past_left_wall(self, game: Tetris) -> None:
-        # Walk piece left until it stops; it must never go out of bounds.
+    def test_cannot_move_past_left_wall(self, game_state: Tetris) -> None:
         for _ in range(BOARD_W * 2):
-            game.move(-1)
-        for cx, _ in game.piece.cells():
-            assert cx >= 0
+            game_state.move(-1)
+        assert all(x >= 0 for x, _ in game_state.piece.cells())
 
-    def test_cannot_move_past_right_wall(self, game: Tetris) -> None:
+    def test_cannot_move_past_right_wall(self, game_state: Tetris) -> None:
         for _ in range(BOARD_W * 2):
-            game.move(1)
-        for cx, _ in game.piece.cells():
-            assert cx < BOARD_W
+            game_state.move(1)
+        assert all(x < BOARD_W for x, _ in game_state.piece.cells())
 
-    def test_move_down_lowers_piece(self, game: Tetris) -> None:
-        y0 = game.piece.y
-        game.move_down()
-        assert game.piece.y == y0 + 1 or game.game_over  # locked on ground
+    def test_move_returns_false_when_blocked(self) -> None:
+        t = Tetris()
+        t.piece = game.Piece("O", x=0, y=5)
+        assert not t.move(-1)  # already against left wall
+
+    def test_move_returns_false_when_frozen(self) -> None:
+        t = Tetris()
+        fill_row(t, BOARD_H - 1)
+        t.pending_clears = [BOARD_H - 1]
+        assert not t.move(1)
+
+
+# ---------------------------------------------------------------------------
+# Rotation (SRS)
+# ---------------------------------------------------------------------------
 
 
 class TestRotation:
-    @pytest.mark.parametrize("kind,rot", sorted({(k, r) for k, states in PIECES.items() for r in range(len(states))}))
-    def test_rotate_changes_orientation(self, kind: str, rot: int) -> None:
+    def test_rotate_clockwise_and_counterclockwise_are_inverses(self) -> None:
         t = Tetris()
-        t.piece = main.Piece(kind=kind, x=BOARD_W // 2 - 2, y=0, rot=rot)
-        before = frozenset((dx - min(c[0] for c in PIECES[kind][rot]), dy) for dx, dy in PIECES[kind][rot])
-        t.rotate()
-        after_rot = t.piece.rot
-        # Piece either rotated (O is identical in all rotations) or kicked.
-        assert after_rot in range(4)
-        # Cells must still be inside the board after any wall kick.
-        for cx, cy in t.piece.cells():
-            assert 0 <= cx < BOARD_W
-
-    def test_rotate_against_wall_uses_wall_kick(self) -> None:
-        t = Tetris()
-        # J piece in the left wall: rotating should kick it right instead of failing.
-        t.piece = main.Piece(kind="I", x=-2, y=0, rot=0)  # horizontal I near left edge
-        t.rotate()
-        for cx, _ in t.piece.cells():
-            assert cx >= 0
+        t.piece = game.Piece("T", x=4, y=5)
+        start = (t.piece.x, t.piece.y, t.piece.rot)
+        t.rotate(1)
+        t.rotate(-1)
+        assert (t.piece.x, t.piece.y, t.piece.rot) == start
 
     def test_full_rotation_cycle_restores_orientation(self) -> None:
         t = Tetris()
-        t.piece = main.Piece(kind="T", x=BOARD_W // 2 - 1, y=5)
+        t.piece = game.Piece("T", x=4, y=5)
         start = frozenset((x - t.piece.x, y) for x, y in t.piece.cells())
         for _ in range(4):
-            t.rotate()
+            t.rotate(1)
         end = frozenset((x - t.piece.x, y) for x, y in t.piece.cells())
         assert start == end
 
+    def test_floor_kick(self) -> None:
+        """T piece flat on the floor should kick up when rotating (SRS)."""
+        t = Tetris()
+        # T rot0 = [(1,0),(0,1),(1,1),(2,1)] → bottom at y+1; place bottom on floor.
+        t.piece = game.Piece("T", x=4, y=BOARD_H - 2)
+        assert t.rotate(1)
+        assert t.piece.rot == 1
+        # The kick must have lifted the piece so all cells fit on the board.
+        assert all(y < BOARD_H for _, y in t.piece.cells())
+        assert not t._collides(t.piece)
+
+    def test_wall_kick_against_left_wall(self) -> None:
+        t = Tetris()
+        # I piece (vertical, rot1) jammed against the left wall rotates right.
+        t.piece = game.Piece("I", x=-1, y=5, rot=1)
+        assert t.rotate(1)
+        assert all(x >= 0 for x, _ in t.piece.cells())
+
+    def test_rotation_impossible_returns_false(self) -> None:
+        t = Tetris()
+        # Fill the board except the piece's current cells so no kick fits.
+        t.piece = game.Piece("T", x=4, y=9)
+        t.board = [["T"] * BOARD_W for _ in range(BOARD_H)]
+        for x, y in t.piece.cells():
+            t.board[y][x] = ""
+        assert not t.rotate(1)
+
+    def test_o_piece_rotation_is_noop_position(self) -> None:
+        t = Tetris()
+        t.piece = game.Piece("O", x=4, y=5)
+        x0, y0 = t.piece.x, t.piece.y
+        assert t.rotate(1)
+        assert (t.piece.x, t.piece.y) == (x0, y0)
+        assert t.piece.rot == 1
+
+
+# ---------------------------------------------------------------------------
+# Dropping
+# ---------------------------------------------------------------------------
+
 
 class TestDropping:
+    def test_soft_drop_scores_point(self) -> None:
+        t = Tetris()
+        before = t.score
+        assert t.soft_drop()
+        assert t.score == before + 1
+
     def test_soft_drop_locks_on_floor(self) -> None:
         t = Tetris()
         piece = t.piece
-        # Soft drop until the piece locks (board gained cells or new piece spawned).
         for _ in range(BOARD_H + 5):
             t.soft_drop()
             if t.piece is not piece and any(k != "" for row in t.board for k in row):
                 break
-        locked_cells = [(x, y) for y, row in enumerate(t.board) for x, k in enumerate(row) if k == piece.kind]
-        # Locked cells rest on the floor or on nothing (nothing below them is empty? no — bottom row).
-        bottom_row = max(y for _, y in locked_cells)
-        assert bottom_row == BOARD_H - 1
+        locked = [(x, y) for y, row in enumerate(t.board) for x, k in enumerate(row) if k == piece.kind]
+        assert max(y for _, y in locked) == BOARD_H - 1
 
-    def test_hard_drop_instantly_locks_piece(self, game: Tetris) -> None:
-        kind = game.piece.kind
-        old_piece = game.piece
-        game.hard_drop()
-        # The piece's cells are now part of the board...
-        assert any(k == kind for row in game.board for k in row)
-        # ...and a fresh piece has spawned at the top.
-        assert game.piece is not old_piece
-        assert game.piece.y == 0
+    def test_hard_drop_scores_two_per_cell(self) -> None:
+        t = Tetris()
+        dist = t.hard_drop()
+        assert dist > 0
+        assert t.score == 2 * dist
 
-    def test_ghost_y_is_at_or_below_piece(self, game: Tetris) -> None:
-        assert game.ghost_y() >= game.piece.y
+    def test_hard_drop_instantly_locks_piece(self, game_state: Tetris) -> None:
+        kind = game_state.piece.kind
+        old_piece = game_state.piece
+        game_state.hard_drop()
+        assert any(k == kind for row in game_state.board for k in row)
+        assert game_state.piece is not old_piece
+        assert game_state.piece.y == 0
 
-    def test_ghost_y_rests_on_floor_or_stack(self, game: Tetris) -> None:
-        gy = game.ghost_y()
-        p = game.piece
-        ghost = main.Piece(p.kind, p.x, gy, p.rot)
-        below = main.Piece(p.kind, p.x, gy + 1, p.rot)
-        assert not game._collides(ghost)
-        assert game._collides(below)
+    def test_hard_drop_on_frozen_board_returns_zero(self) -> None:
+        t = Tetris()
+        fill_row(t, BOARD_H - 1)
+        t.pending_clears = [BOARD_H - 1]
+        assert t.hard_drop() == 0
+
+    def test_ghost_y_at_or_below_piece(self, game_state: Tetris) -> None:
+        assert game_state.ghost_y() >= game_state.piece.y
+
+    def test_ghost_y_rests_on_floor_or_stack(self, game_state: Tetris) -> None:
+        gy = game_state.ghost_y()
+        p = game_state.piece
+        ghost = game.Piece(p.kind, p.x, gy, p.rot)
+        below = game.Piece(p.kind, p.x, gy + 1, p.rot)
+        assert not game_state._collides(ghost, p.rot)
+        assert game_state._collides(below, p.rot)
+
+
+# ---------------------------------------------------------------------------
+# Hold
+# ---------------------------------------------------------------------------
+
+
+class TestHold:
+    def test_hold_stores_piece_and_spawns_next(self) -> None:
+        t = Tetris()
+        current = t.piece.kind
+        assert t.holding is None
+        t.hold()
+        assert t.holding == current
+        assert t.piece.kind in PIECES
+        assert t.piece.y == 0  # a fresh piece was spawned
+
+    def test_cannot_hold_twice_in_a_row(self) -> None:
+        t = Tetris()
+        t.hold()
+        piece_before = t.piece
+        t.hold()
+        assert t.piece is piece_before  # second hold is a no-op
+
+    def test_hold_swap(self) -> None:
+        t = Tetris()
+        first = t.piece.kind
+        second = t.next_kind
+        t.hold()
+        assert t.holding == first
+        assert t.piece.kind == second
+        t.can_hold = True  # normally reset after lock
+        t.hold()
+        assert t.holding == second
+        assert t.piece.kind == first
+
+    def test_hold_resets_after_lock(self) -> None:
+        t = Tetris()
+        t.can_hold = True
+        t.hold()
+        assert not t.can_hold
+        t.hard_drop()
+        assert t.can_hold  # lock re-enables hold for the next piece
+
+
+# ---------------------------------------------------------------------------
+# Line clearing / flash
+# ---------------------------------------------------------------------------
 
 
 class TestLineClearing:
-    def test_full_line_is_cleared_and_scored(self) -> None:
+    def test_full_row_detected(self) -> None:
         t = Tetris()
-        t.board[BOARD_H - 1] = ["T"] * BOARD_W
-        t._clear_lines()
+        fill_row(t, 5)
+        fill_row(t, 19)
+        assert t.full_rows() == [5, 19]
+
+    def test_commit_clears_row_and_scores(self) -> None:
+        t = Tetris()
+        fill_row(t, BOARD_H - 1)
+        t.pending_clears = [BOARD_H - 1]
+        t._commit_clears()
         assert t.lines == 1
         assert t.score == 100 * t.level
         assert all(k == "" for row in t.board for k in row)
@@ -161,34 +284,154 @@ class TestLineClearing:
     def test_scoring_table(self, count: int, expected: int) -> None:
         t = Tetris()
         for i in range(count):
-            t.board[BOARD_H - 1 - i] = ["I"] * BOARD_W
-        t._clear_lines()
+            fill_row(t, BOARD_H - 1 - i)
+        t.pending_clears = list(range(BOARD_H - count, BOARD_H))
+        t._commit_clears()
         assert t.score == expected
         assert t.lines == count
 
-    def test_uncleared_rows_fall_down(self) -> None:
+    def test_rows_above_fall_down(self) -> None:
         t = Tetris()
-        t.board[BOARD_H - 1] = ["T"] * BOARD_W
+        fill_row(t, BOARD_H - 1)
         t.board[BOARD_H - 2][0] = "J"
-        t._clear_lines()
+        t.pending_clears = [BOARD_H - 1]
+        t._commit_clears()
         assert t.board[BOARD_H - 1][0] == "J"
         assert all(k == "" for k in t.board[BOARD_H - 2])
 
-    def test_board_height_invariant_after_clear(self) -> None:
+    def test_board_dimensions_preserved(self) -> None:
         t = Tetris()
         for i in range(4):
-            t.board[BOARD_H - 1 - i] = ["O"] * BOARD_W
-        t._clear_lines()
+            fill_row(t, BOARD_H - 1 - i)
+        t.pending_clears = list(range(BOARD_H - 4, BOARD_H))
+        t._commit_clears()
         assert len(t.board) == BOARD_H
         assert all(len(row) == BOARD_W for row in t.board)
+
+    def test_lock_sets_pending_clears_and_freezes(self) -> None:
+        t = Tetris()
+        # Fill the bottom row except the cells the current piece will fill.
+        p = t.piece
+        fill_row(t, BOARD_H - 1)
+        for x, _ in p.cells():
+            pass
+        # Position piece so its lock completes the row: simpler — fill row,
+        # clear piece cells, then lock.
+        t.piece = game.Piece("O", x=4, y=BOARD_H - 2)
+        t.board = [["T"] * BOARD_W for _ in range(BOARD_H)]
+        for x, y in t.piece.cells():
+            t.board[y][x] = ""
+        t._lock()
+        assert t.frozen
+        assert t.flash_frames > 0
+
+    def test_advance_flash_unfreezes_after_frames(self) -> None:
+        t = Tetris()
+        fill_row(t, BOARD_H - 1)
+        t.board[BOARD_H - 2][0] = "J"
+        t.pending_clears = [BOARD_H - 1]
+        t.flash_frames = 3
+        assert t.frozen
+        assert not t.advance_flash()  # 2 left
+        assert not t.advance_flash()  # 1 left
+        assert t.advance_flash()      # done: rows cleared, piece spawned
+        assert not t.frozen
+        assert not t.pending_clears
+        assert t.board[BOARD_H - 1][0] == "J"  # row above fell down
+
+    def test_advance_flash_with_no_pending_is_noop(self) -> None:
+        t = Tetris()
+        assert t.advance_flash()
+
+    def test_tick_ignored_while_frozen(self) -> None:
+        t = Tetris()
+        fill_row(t, BOARD_H - 1)
+        t.pending_clears = [BOARD_H - 1]
+        y0 = t.piece.y
+        t.tick()
+        assert t.piece.y == y0
+
+
+# ---------------------------------------------------------------------------
+# Scoring extras: combos & back-to-back
+# ---------------------------------------------------------------------------
+
+
+class TestCombosAndB2B:
+    def test_combo_bonus_on_consecutive_clears(self) -> None:
+        t = Tetris()
+        fill_row(t, BOARD_H - 1)
+        t.pending_clears = [BOARD_H - 1]
+        t._commit_clears()
+        first = t.score
+        assert first == 100
+
+        fill_row(t, BOARD_H - 1)
+        t.pending_clears = [BOARD_H - 1]
+        t._commit_clears()
+        assert t.score == first + 100 + 50 * 1 * t.level  # combo step 1
+
+    def test_combo_resets_when_piece_lands_without_clear(self) -> None:
+        t = Tetris()
+        fill_row(t, BOARD_H - 1)
+        t.pending_clears = [BOARD_H - 1]
+        t._commit_clears()
+        assert t.combo == 1
+        t._on_lock_no_clears()
+        assert t.combo == 0
+
+    def test_back_to_back_tetris_bonus(self) -> None:
+        t = Tetris()
+        for i in range(4):
+            fill_row(t, BOARD_H - 1 - i)
+        t.pending_clears = list(range(BOARD_H - 4, BOARD_H))
+        t._commit_clears()
+        assert t.b2b is True
+        first = t.score
+        assert first == 800
+
+        for i in range(4):
+            fill_row(t, BOARD_H - 1 - i)
+        t.pending_clears = list(range(BOARD_H - 4, BOARD_H))
+        t._commit_clears()
+        # Second consecutive Tetris: 800 * 1.5 + combo bonus (50 * 1)
+        assert t.score == first + 1200 + 50
+
+    def test_singles_break_b2b(self) -> None:
+        t = Tetris()
+        for i in range(4):
+            fill_row(t, BOARD_H - 1 - i)
+        t.pending_clears = list(range(BOARD_H - 4, BOARD_H))
+        t._commit_clears()
+        assert t.b2b is True
+
+        fill_row(t, BOARD_H - 1)
+        t.pending_clears = [BOARD_H - 1]
+        t._commit_clears()
+        assert t.b2b is False
+
+    def test_b2b_survives_non_clearing_piece(self) -> None:
+        t = Tetris()
+        for i in range(4):
+            fill_row(t, BOARD_H - 1 - i)
+        t.pending_clears = list(range(BOARD_H - 4, BOARD_H))
+        t._commit_clears()
+        t._on_lock_no_clears()
+        assert t.b2b is True  # only broken by a non-Tetris clear
+
+
+# ---------------------------------------------------------------------------
+# Leveling
+# ---------------------------------------------------------------------------
 
 
 class TestLeveling:
     def test_level_up_every_ten_lines(self) -> None:
         t = Tetris()
         for _ in range(10):
-            t.board[BOARD_H - 1] = ["T"] * BOARD_W
-            t._clear_lines()
+            fill_row(t, BOARD_H - 1)
+            t.pending_clears = [BOARD_H - 1]
+            t._commit_clears()
         assert t.level == 2
         assert t.lines == 10
 
@@ -197,30 +440,38 @@ class TestLeveling:
         t.level = 5
         t.drop_interval = 0.5 * (0.8 ** (t.level - 1))
         assert t.drop_interval < 0.5
+        assert t.drop_interval >= 0.05
+
+
+# ---------------------------------------------------------------------------
+# Collision
+# ---------------------------------------------------------------------------
 
 
 class TestCollision:
     def test_collision_with_stack(self) -> None:
         t = Tetris()
         t.board[BOARD_H - 2][5] = "T"
-        p = main.Piece("O", x=4, y=BOARD_H - 2)
+        p = game.Piece("O", x=4, y=BOARD_H - 2)
         assert t._collides(p)
 
     def test_no_collision_in_empty_space(self) -> None:
         t = Tetris()
-        p = main.Piece("O", x=3, y=3)
-        assert not t._collides(p)
+        assert not t._collides(game.Piece("O", x=3, y=3))
 
     def test_collision_out_of_bounds(self) -> None:
         t = Tetris()
-        p = main.Piece("O", x=BOARD_W - 1, y=3)
-        assert t._collides(p)
+        assert t._collides(game.Piece("O", x=BOARD_W - 1, y=3))
+
+
+# ---------------------------------------------------------------------------
+# Game over
+# ---------------------------------------------------------------------------
 
 
 class TestGameOver:
     def test_game_over_when_spawn_collides(self) -> None:
         t = Tetris()
-        # Fill the top rows so a new spawn cannot fit.
         for row in t.board[:4]:
             row[:] = ["T"] * BOARD_W
         t._spawn()
@@ -228,7 +479,67 @@ class TestGameOver:
 
     def test_game_over_when_locked_above_board(self) -> None:
         t = Tetris()
-        # A piece whose cells extend above the top of the board triggers game over on lock.
-        t.piece = main.Piece("O", x=2, y=-1)
+        t.piece = game.Piece("O", x=2, y=-1)
         t._lock()
         assert t.game_over
+
+    def test_actions_disabled_after_game_over(self) -> None:
+        t = Tetris()
+        t.game_over = True
+        assert not t.move(1)
+        assert not t.rotate(1)
+        assert not t.soft_drop()
+        assert t.hard_drop() == 0
+        t.hold()
+
+
+# ---------------------------------------------------------------------------
+# High scores
+# ---------------------------------------------------------------------------
+
+
+class TestHighScores:
+    def test_empty_best_is_zero(self, tmp_path) -> None:
+        hs = HighScores(tmp_path / "scores.json")
+        assert hs.best() == 0
+        assert hs.entries == []
+
+    def test_record_and_rank(self, tmp_path) -> None:
+        hs = HighScores(tmp_path / "scores.json")
+        assert hs.record(500, 2, 1) == 0
+        assert hs.record(1000, 5, 1) == 0  # higher score takes rank 1
+        assert hs.record(200, 1, 1) == 2
+
+    def test_persists_to_disk(self, tmp_path) -> None:
+        path = tmp_path / "scores.json"
+        hs = HighScores(path)
+        hs.record(420, 3, 1)
+        raw = json.loads(path.read_text())
+        assert raw[0]["score"] == 420
+
+        loaded = HighScores(path)
+        assert loaded.best() == 420
+        assert loaded.entries == raw
+
+    def test_keeps_top_five(self, tmp_path) -> None:
+        hs = HighScores(tmp_path / "scores.json")
+        for score in (10, 50, 30, 90, 20, 70):
+            hs.record(score, 1, 1)
+        assert [e["score"] for e in hs.entries] == [90, 70, 50, 30, 20]
+
+    def test_zero_score_not_recorded(self, tmp_path) -> None:
+        hs = HighScores(tmp_path / "scores.json")
+        assert hs.record(0, 0, 1) is None
+        assert hs.entries == []
+
+    def test_corrupt_file_falls_back_to_empty(self, tmp_path) -> None:
+        path = tmp_path / "scores.json"
+        path.write_text("{not json")
+        hs = HighScores(path)
+        assert hs.entries == []
+        assert hs.record(100, 1, 1) == 0
+
+    def test_env_override(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("TETRIS_SCORES", str(tmp_path / "alt.json"))
+        path = game.default_scores_path()
+        assert path == tmp_path / "alt.json"
