@@ -16,11 +16,13 @@ from game import (
 # Colors: pair index -> piece kind
 COLORS: dict[str, int] = {"I": 1, "O": 2, "T": 3, "S": 4, "Z": 5, "J": 6, "L": 7}
 
-# DAS (Delayed Auto Shift) tuning
-DAS_DELAY = 0.17   # seconds before auto-repeat kicks in
-ARR_RATE = 0.045   # auto-repeat interval
+# Key handling tuning
+# Terminals deliver their own auto-repeat while a key is held, so we just
+# throttle consecutive moves. This also guards against a single tap producing
+# multiple events (e.g. escape-sequence artifacts).
+STEP_THROTTLE = 0.04  # min interval between horizontal moves
 ROTATE_COOLDOWN = 0.12
-FRAME = 0.02       # main loop frame time (50 fps)
+FRAME = 0.02          # main loop frame time (50 fps)
 
 
 def init_colors() -> None:
@@ -222,21 +224,18 @@ def game_loop(stdscr: curses.window) -> None:
     rank: int | None = None
     start_time = time.monotonic()
 
-    # DAS state
-    held_dir = 0
-    held_since = 0.0
-    last_move = 0.0
+    # Input timing state
+    last_step = 0.0
     last_rotate = 0.0
     last_grav = 0.0
 
     def reset_game() -> None:
-        nonlocal t, new_best, rank, start_time, held_dir, last_move, last_grav
+        nonlocal t, new_best, rank, start_time, last_step, last_grav
         t = Tetris()
         new_best = False
         rank = None
         start_time = time.monotonic()
-        held_dir = 0
-        last_move = 0.0
+        last_step = 0.0
         last_grav = 0.0
 
     while True:
@@ -251,16 +250,13 @@ def game_loop(stdscr: curses.window) -> None:
         elif key in (ord("p"), ord("P")):
             t.paused = not t.paused
         elif not t.paused and not t.game_over:
-            if key == curses.KEY_LEFT:
-                if held_dir != -1:
-                    held_dir, held_since = -1, now
-                    t.move(-1)
-                    last_move = now
-            elif key == curses.KEY_RIGHT:
-                if held_dir != 1:
-                    held_dir, held_since = 1, now
-                    t.move(1)
-                    last_move = now
+            if key in (curses.KEY_LEFT, curses.KEY_RIGHT):
+                d = -1 if key == curses.KEY_LEFT else 1
+                # One move per event, throttled — the terminal's auto-repeat
+                # provides the repeat while the key is held.
+                if now - last_step >= STEP_THROTTLE:
+                    t.move(d)
+                    last_step = now
             elif key == curses.KEY_UP:
                 if now - last_rotate >= ROTATE_COOLDOWN:
                     t.rotate(1)
@@ -275,17 +271,6 @@ def game_loop(stdscr: curses.window) -> None:
                 t.hard_drop()
             elif key in (ord("c"), ord("C")):
                 t.hold()
-
-        # ---- DAS auto-repeat ----------------------------------------
-        if (
-            held_dir
-            and now - held_since >= DAS_DELAY
-            and now - last_move >= ARR_RATE
-            and not t.paused
-            and not t.game_over
-        ):
-            t.move(held_dir)
-            last_move = now
 
         # ---- gravity --------------------------------------------------
         if not t.paused and not t.game_over and not t.frozen:
