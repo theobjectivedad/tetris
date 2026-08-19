@@ -77,10 +77,10 @@ observes and drives it.
   be ≥ 0.05 or repeats collide.
 * **Terminal escape sequences**: send real bytes (`\x1b[C`…); the game goes
   raw itself via curses, and pyte reproduces the exact grid from the cursor
-  moves (board origin `bx=(W-53)//2, by=(H-27)//2`; the play field is 33
-  cols wide — 2-col solid walls outside the 29-col cell area (cell pitch
-  3, 2-char cells) — so blocks never render over the walls; sidebar at
-  `bx+37`).
+  moves (board origin `bx=(W-42)//2, by=(H-27)//2`; the play field is 22
+  cols wide — 1-col solid walls outside the 20-col cell area (solid
+  2-char cells, no gap) — so blocks never render over the walls; sidebar at
+  `bx+26`).
 * **Reader thread hygiene**: no `time.sleep` in the hot path; it must exit
   on EOF and `waitpid` the child so no zombie is left behind.
 * **Keep UI markers in sync**: if the game UI changes (sidebar labels,

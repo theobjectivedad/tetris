@@ -91,14 +91,14 @@ def run_game(events: list[tuple[float, int]], duration: float = 2.0, seed: int =
 def piece_cols(scr: FakeScreen) -> set[int]:
     """Board columns of the live piece (topmost █ cells in the cell area).
 
-    Layout math must match main.game_loop: total width 53 (board 33 =
-    2-col walls + 29-col cell area, + gap 4 + sidebar 16), board block 22
-    rows tall. The solid walls (2 cols per side) sit OUTSIDE the cell area,
-    so the cell area spans bx+2 .. bx+30.
+    Layout math must match main.game_loop: total width 42 (board 22 =
+    1-col walls + 20-col cell area, + gap 4 + sidebar 16), board block 22
+    rows tall. Cells are 2-col solid blocks with no gap, so the cell area
+    spans bx+1 .. bx+20.
     """
     by = max(1, (scr.rows - 27) // 2)
-    bx = (scr.cols - 53) // 2
-    lo, hi = bx + 2, bx + 30
+    bx = (scr.cols - 42) // 2
+    lo, hi = bx + 1, bx + 20
     top_row = None
     for (y, x), ch in scr.grid.items():
         if ch == "█" and by + 1 <= y <= by + 20 and lo <= x <= hi:
@@ -106,9 +106,9 @@ def piece_cols(scr: FakeScreen) -> set[int]:
                 top_row = y
     if top_row is None:
         return set()
-    # Cells are 2 chars wide with pitch 3.
+    # Cells are 2 chars wide, contiguous (no gap).
     return {
-        (x - lo) // 3
+        (x - lo) // 2
         for (y, x), ch in scr.grid.items()
         if ch == "█" and y == top_row and lo <= x <= hi
     }

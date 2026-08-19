@@ -16,12 +16,14 @@ from game import (
 # Colors: pair index -> piece kind
 COLORS: dict[str, int] = {"I": 1, "O": 2, "T": 3, "S": 4, "Z": 5, "J": 6, "L": 7}
 
-# Drawn width of the cell area: cells are 2 chars wide with a 1-col gap
-# (pitch 3), so 10 cells span BOARD_W*3-1 columns. The play field adds a
-# 2-col solid wall on each side.
-BOARD_COLS = 29
-BOARD_WALL = 2
-BOARD_W_DRAWN = BOARD_COLS + 2 * BOARD_WALL  # 33
+# Drawn geometry: each cell renders as a solid 2-column block — about
+# square on a terminal's ~2:1 char aspect — and cells are contiguous with
+# no gap, so filled regions read as one tight solid mass. The play field
+# adds a 1-col solid wall outside the cell area.
+BOARD_PITCH = 2
+BOARD_INNER_W = BOARD_W * BOARD_PITCH  # 20
+BOARD_WALL = 1
+BOARD_W_DRAWN = BOARD_INNER_W + 2 * BOARD_WALL  # 22
 CELL_OFF = BOARD_WALL  # cell x=0 is drawn at bx + CELL_OFF
 
 # Key handling tuning
@@ -93,31 +95,32 @@ def draw_piece_preview(stdscr: curses.window, kind: str, ix: int, iy: int, dim: 
     xs = [x for x, _ in cells]
     ys = [y for _, y in cells]
     top, bottom, left, right = min(ys), max(ys), min(xs), max(xs)
-    width = (right - left + 1) * 3 - 1
-    ox = ix + (5 - width) // 2
+    width = (right - left + 1) * BOARD_PITCH
+    # Box inner area is 12 cols wide, starting at ix - 1.
+    ox = ix - 1 + (12 - width) // 2
     for y in range(top, bottom + 1):
         for x in range(left, right + 1):
             if (x, y) in cells:
                 txt = "██"
                 try:
                     if dim:
-                        stdscr.addstr(iy + (y - top), ox + (x - left) * 3, txt, curses.A_DIM)
+                        stdscr.addstr(iy + (y - top), ox + (x - left) * BOARD_PITCH, txt, curses.A_DIM)
                     else:
-                        stdscr.addstr(iy + (y - top), ox + (x - left) * 3, txt, cell_attr(kind))
+                        stdscr.addstr(iy + (y - top), ox + (x - left) * BOARD_PITCH, txt, cell_attr(kind))
                 except curses.error:
                     pass
 
 
 def draw_board(stdscr: curses.window, t: Tetris, bx: int, by: int) -> None:
     # Solid border around the play area. The walls are outside the cell
-    # area (2 cols per side), so blocks never render on top of them.
-    right = bx + BOARD_W_DRAWN - BOARD_WALL
+    # area (1 col per side), so blocks never render on top of them.
+    right = bx + BOARD_W_DRAWN - 1
     try:
         stdscr.addstr(by, bx, "█" * BOARD_W_DRAWN, curses.A_DIM)
         stdscr.addstr(by + BOARD_H + 1, bx, "█" * BOARD_W_DRAWN, curses.A_DIM)
         for y in range(1, BOARD_H + 1):
-            stdscr.addstr(by + y, bx, "██", curses.A_DIM)
-            stdscr.addstr(by + y, right, "██", curses.A_DIM)
+            stdscr.addstr(by + y, bx, "█", curses.A_DIM)
+            stdscr.addstr(by + y, right, "█", curses.A_DIM)
     except curses.error:
         pass
 
@@ -154,7 +157,7 @@ def draw_board(stdscr: curses.window, t: Tetris, bx: int, by: int) -> None:
                         stdscr.addstr(by + y + 1, x_cursor, text, attr)
                 except curses.error:
                     pass
-            x_cursor += 3  # 2 cells + 1 separator
+            x_cursor += BOARD_PITCH  # solid blocks, no gap
 
         if y in flash_rows:
             try:
@@ -164,10 +167,10 @@ def draw_board(stdscr: curses.window, t: Tetris, bx: int, by: int) -> None:
 
 
 def draw_sidebar(stdscr: curses.window, t: Tetris, hs: HighScores, by: int, sx: int, new_best: bool) -> None:
-    hold_x, hold_y = draw_box(stdscr, "HOLD", sx, by, 8)
+    hold_x, hold_y = draw_box(stdscr, "HOLD", sx, by, 14)
     draw_piece_preview(stdscr, t.holding or "", hold_x, hold_y, dim=not t.can_hold)
 
-    next_x, next_y = draw_box(stdscr, "NEXT", sx, by + 7, 8)
+    next_x, next_y = draw_box(stdscr, "NEXT", sx, by + 7, 14)
     draw_piece_preview(stdscr, t.next_kind, next_x, next_y)
 
     stats = [
@@ -185,13 +188,10 @@ def draw_sidebar(stdscr: curses.window, t: Tetris, hs: HighScores, by: int, sx: 
             pass
 
     controls = [
-        "←/→  move",
-        "↑/Z  rotate",
-        "↓    soft drop",
-        "SPACE hard drop",
-        "C    hold",
-        "P    pause",
-        "Q    quit",
+        "←/→ move    ↑/Z rotate",
+        "↓ soft drop  SPACE hard",
+        "C hold   P pause",
+        "Q quit",
     ]
     for i, line in enumerate(controls):
         try:
@@ -207,16 +207,16 @@ def draw_sidebar(stdscr: curses.window, t: Tetris, hs: HighScores, by: int, sx: 
 
 
 def draw_game_over(stdscr: curses.window, t: Tetris, hs: HighScores, elapsed: float, rank: int | None, bx: int, by: int) -> None:
-    interior_w = BOARD_COLS  # the cell area, inside the walls
+    interior_w = BOARD_INNER_W  # the cell area, inside the walls
     lines = [
         "GAME OVER",
         "",
         f"Score:  {t.score:,}",
-        f"Lines {t.lines}   Level {t.level}",
-        f"Time {int(elapsed // 60):02d}:{int(elapsed % 60):02d}   Pcs {t.pieces}",
+        f"Lines {t.lines}  Level {t.level}",
+        f"Time {int(elapsed // 60):02d}:{int(elapsed % 60):02d}  Pcs {t.pieces}",
     ]
     if rank is not None:
-        lines.append(f"★ New high score: #{rank + 1} ★")
+        lines.append("★ New high score ★")
     else:
         lines.append(f"Best:   {hs.best():,}")
     lines += ["", "R replay      Q quit"]
@@ -224,7 +224,7 @@ def draw_game_over(stdscr: curses.window, t: Tetris, hs: HighScores, elapsed: fl
     # darkening overlay behind the message (drawn first, text on top)
     for y in range(BOARD_H):
         try:
-            stdscr.addstr(by + y + 1, bx + 2, " " * interior_w)
+            stdscr.addstr(by + y + 1, bx + CELL_OFF, " " * interior_w)
         except curses.error:
             pass
 
@@ -234,7 +234,7 @@ def draw_game_over(stdscr: curses.window, t: Tetris, hs: HighScores, elapsed: fl
             attr = curses.A_REVERSE if line == "GAME OVER" else (
                 curses.color_pair(9) if "★" in line else 0
             )
-            stdscr.addstr(start_y + i, bx + 2 + max(0, (interior_w - len(line)) // 2), line, attr)
+            stdscr.addstr(start_y + i, bx + CELL_OFF + max(0, (interior_w - len(line)) // 2), line, attr)
         except curses.error:
             pass
 
@@ -347,7 +347,7 @@ def game_loop(stdscr: curses.window) -> None:
         max_y, max_x = stdscr.getmaxyx()
         sidebar_x_offset = BOARD_W_DRAWN + 4
         total_w = sidebar_x_offset + 16
-        need_h = BOARD_H + 3  # top border + 20 rows + bottom border, plus 1
+        need_h = BOARD_H + 8  # board block + sidebar controls must fit
         if max_x < total_w or max_y < need_h:
             stdscr.erase()
             try:
