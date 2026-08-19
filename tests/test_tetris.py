@@ -132,6 +132,55 @@ class TestMovement:
 
 
 # ---------------------------------------------------------------------------
+# Piece rotation data (SRS state chains)
+# ---------------------------------------------------------------------------
+
+
+class TestPieceRotationData:
+    """The PIECES rotation states must form true rotation chains.
+
+    Regression: the L piece's 180 state used to be a mirrored shape (nub
+    pointing up), so the piece visibly flipped instead of rotating.
+    """
+
+    @staticmethod
+    def _rot90(cells: set[tuple[int, int]], box: int) -> set[tuple[int, int]]:
+        # 90 deg clockwise in a box x box box, y growing downward.
+        return {(box - 1 - y, x) for x, y in cells}
+
+    @pytest.mark.parametrize("kind", ["J", "L", "T"])
+    def test_jlstz_rotation_chain(self, kind: str) -> None:
+        states = PIECES[kind]
+        for i in range(4):
+            expected = self._rot90(set(states[i]), 3)
+            assert set(states[(i + 1) % 4]) == expected, f"{kind} state {i} -> {i + 1}"
+
+    def test_i_rotation_chain(self) -> None:
+        # I uses the 4x4 box: state 0 = row 1, state 1 = col 2, state 2 =
+        # row 2, state 3 = col 1 (standard SRS geometry the KICKS_I table
+        # is derived from).
+        states = PIECES["I"]
+        for i in range(4):
+            expected = self._rot90(set(states[i]), 4)
+            assert set(states[(i + 1) % 4]) == expected, f"I state {i} -> {(i + 1) % 4}"
+
+    @pytest.mark.parametrize("kind", ["S", "Z"])
+    def test_s_z_normalized_chain(self, kind: str) -> None:
+        # S/Z are 180-degree symmetric: the SRS spec normalizes states 2/3
+        # to the spawn band, so state 2 == state 0 and state 3 == state 1.
+        states = PIECES[kind]
+        assert set(states[0]) == set(states[2])
+        assert set(states[1]) == set(states[3])
+        assert set(states[1]) == self._rot90(set(states[0]), 3)
+        assert set(states[3]) == self._rot90(set(states[2]), 3)
+
+    def test_l_180_state_shape(self) -> None:
+        """The exact cells of the L piece's 180 state: a row of three with
+        the nub below the left cell (nub pointing down-left, not up)."""
+        assert sorted(PIECES["L"][2]) == [(0, 1), (0, 2), (1, 1), (2, 1)]
+
+
+# ---------------------------------------------------------------------------
 # Rotation (SRS)
 # ---------------------------------------------------------------------------
 

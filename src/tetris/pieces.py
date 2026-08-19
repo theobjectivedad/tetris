@@ -13,9 +13,11 @@ MAX_START_LEVEL = 20  # upper bound for the player-selectable starting level
 # Piece definitions: list of rotation states (SRS), each a list of (x, y) offsets.
 PIECES: dict[str, list[list[tuple[int, int]]]] = {
     "I": [
-        [(0, 0), (1, 0), (2, 0), (3, 0)],
+        # 4x4 box states per standard SRS: state 0 = row 1, state 2 = row 2
+        # (the KICKS_I table is derived from exactly this geometry).
+        [(0, 1), (1, 1), (2, 1), (3, 1)],
         [(2, 0), (2, 1), (2, 2), (2, 3)],
-        [(0, 0), (1, 0), (2, 0), (3, 0)],
+        [(0, 2), (1, 2), (2, 2), (3, 2)],
         [(1, 0), (1, 1), (1, 2), (1, 3)],
     ],
     "O": [
@@ -51,7 +53,7 @@ PIECES: dict[str, list[list[tuple[int, int]]]] = {
     "L": [
         [(2, 0), (0, 1), (1, 1), (2, 1)],
         [(1, 0), (1, 1), (1, 2), (2, 2)],
-        [(0, 1), (0, 2), (1, 2), (2, 2)],
+        [(0, 1), (1, 1), (2, 1), (0, 2)],
         [(0, 0), (1, 0), (1, 1), (1, 2)],
     ],
 }
