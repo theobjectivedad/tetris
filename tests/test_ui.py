@@ -10,7 +10,7 @@ import random
 
 from tetris import main
 from tetris.game import Piece
-from tetris.main import BOARD_H, BOARD_W
+from tetris.main import BOARD_H
 
 
 class FakeTime:
@@ -102,7 +102,7 @@ def piece_cols(scr: FakeScreen) -> set[int]:
     lo, hi = bx + 1, bx + 20
     top_row = None
     for (y, x), ch in scr.grid.items():
-        if ch == "█" and by + 1 <= y <= by + 20 and lo <= x <= hi:
+        if ch == "█" and by + 1 <= y <= by + 20 and lo <= x <= hi:  # noqa: SIM102
             if top_row is None or y < top_row:
                 top_row = y
     if top_row is None:

@@ -1,13 +1,50 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
 [project]
 name = "tetris"
-version = "0.1.0"
 description = "A terminal-based Tetris game built with curses"
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "theobjectivedad", email = "theobjectivedad@users.noreply.local" },
+]
+keywords = ["tetris", "curses", "terminal", "game", "block-puzzle"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Games/Entertainment :: Puzzle Games",
+    "Typing :: Typed",
+]
 dependencies = [
     "mcp>=2.0",
     "pyte>=0.8.1",
 ]
+
+# Version is derived from git tags via hatch-vcs (e.g. v1.2.3 -> 1.2.3).
+dynamic = ["version"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "pytest-cov>=5",
+    "pytest-watch>=4",
+]
+
+[project.urls]
+Homepage = "https://github.com/theobjectivedad/tetris"
+Repository = "https://github.com/theobjectivedad/tetris"
+Issues = "https://github.com/theobjectivedad/tetris/issues"
 
 [project.scripts]
 tetris-vt-server = "tetris.mcp.server:main"
@@ -17,9 +54,12 @@ dev = [
     "pytest>=9.1.1",
 ]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0.1.0"
+
+[tool.setuptools_scm]
+fallback_version = "0.1.0"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tetris"]
@@ -27,3 +67,21 @@ packages = ["src/tetris"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+strict = true
+
+# The MCP play-test harness wraps an untyped external SDK (@mcp.tool). It is a
+# dev tool, not the shipped core, so the strictness that trips on untyped
+# decorators / untyped wrappers is relaxed for just that module.
+[[tool.mypy.overrides]]
+module = "tetris.mcp.*"
+disallow_untyped_defs = false
+disallow_untyped_decorators = false
+warn_return_any = false

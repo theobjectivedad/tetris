@@ -5,14 +5,18 @@ from __future__ import annotations
 import curses
 import random
 import time
+from typing import cast
 
+from . import __version__
 from .game import (
     BOARD_H,
     BOARD_W,
     PIECES,
+    Event,
     HighScores,
     Tetris,
 )
+from .stats import sidebar_stats
 
 # Colors: pair index -> piece kind
 COLORS: dict[str, int] = {"I": 1, "O": 2, "T": 3, "S": 4, "Z": 5, "J": 6, "L": 7}
@@ -175,15 +179,7 @@ def draw_sidebar(stdscr: curses.window, t: Tetris, hs: HighScores, by: int, sx: 
     draw_piece_preview(stdscr, t.next_kind, next_x, next_y)
     draw_piece_preview(stdscr, t.next_kind2, next_x, next_y + 3, dim=True)
 
-    stats = [
-        ("SCORE", f"{t.score:,}"),
-        ("BEST", f"{hs.best():,}"),
-        ("LINES", str(t.lines)),
-        ("LEVEL", str(t.level)),
-        ("COMBO", str(t.combo) if t.combo > 0 else "—"),
-        ("B2B", "✓" if t.b2b else "—"),
-        ("SPINS", str(t.spins)),
-    ]
+    stats = sidebar_stats(t.snapshot(), hs.best())
     for i, (label, value) in enumerate(stats):
         try:
             stdscr.addstr(by + 16 + i, sx, f"{label:<7}{value}", curses.color_pair(8))
@@ -201,6 +197,17 @@ def draw_sidebar(stdscr: curses.window, t: Tetris, hs: HighScores, by: int, sx: 
             stdscr.addstr(by + 24 + i, sx, line, curses.A_DIM)
         except curses.error:
             pass
+
+    # Version, right-aligned just below the controls menu.
+    try:
+        vtxt = f"v{__version__}"
+        x = sx + 15 - len(vtxt)
+        if x < sx:  # too long to fit; truncate and left-align within the menu
+            vtxt = vtxt[:15]
+            x = sx
+        stdscr.addstr(by + 29, x, vtxt, curses.A_DIM)
+    except curses.error:
+        pass
 
     if new_best:
         try:
@@ -242,6 +249,103 @@ def draw_game_over(stdscr: curses.window, t: Tetris, hs: HighScores, elapsed: fl
             pass
 
 
+# Beeps per effect kind.
+_BEEPS = {"clear": 1, "tetris": 2, "tspin": 3, "tspin-mini": 2}
+
+
+class KeyReader:
+    """Reads logical keys from a curses window.
+
+    Owns the stateful bits of input handling that were previously locals in
+    ``game_loop``: reassembling arrow-key ESC sequences that nodelay() getch
+    can split across reads, and the move/rotate throttle timestamps.
+    """
+
+    def __init__(self) -> None:
+        self.last_step = 0.0
+        self.last_rotate = 0.0
+        self._esc_seq: list[int] = []
+        self._esc_t = 0.0
+
+    def reset(self) -> None:
+        # Restart only resets the move throttle (matches pre-refactor behavior).
+        self.last_step = 0.0
+
+    def next_key(self, stdscr: curses.window, now: float) -> int:
+        """Return the next logical key, or -1 if no input is pending.
+
+        Splits of a 3-byte arrow sequence (ESC [ A/B/C) are reassembled here;
+        a lone ESC that never completes within ESC_TTL is dropped.
+        """
+        raw = stdscr.getch()
+        if raw == -1:
+            return -1
+        key = -1
+        if self._esc_seq:
+            if now - self._esc_t > ESC_TTL:
+                self._esc_seq = []
+            if not self._esc_seq:
+                if raw == 27:
+                    self._esc_seq = [27]
+                    self._esc_t = now
+            else:
+                self._esc_seq.append(raw)
+                if len(self._esc_seq) == 3:
+                    key = ESC_SEQS.get(cast("tuple[int, int, int]", tuple(self._esc_seq)), -1)
+                    self._esc_seq = []
+        elif raw == 27:
+            self._esc_seq = [27]
+            self._esc_t = now
+        else:
+            key = raw
+        return key
+
+    def allow_step(self, now: float) -> bool:
+        if now - self.last_step >= STEP_THROTTLE:
+            self.last_step = now
+            return True
+        return False
+
+    def allow_rotate(self, now: float) -> bool:
+        if now - self.last_rotate >= ROTATE_COOLDOWN:
+            self.last_rotate = now
+            return True
+        return False
+
+
+class Effects:
+    """Transient visual/sound effects: floating score text, board shake, and
+    the T-spin corner flash. Owns that state so ``game_loop`` stays readable."""
+
+    def __init__(self) -> None:
+        self.floaters: list[tuple[str, int, float]] = []
+        self.shake_until = 0.0
+        self.spin_flash: tuple[tuple[int, int], float] | None = None
+
+    def clear(self) -> None:
+        self.floaters.clear()
+        self.shake_until = 0.0
+        self.spin_flash = None
+
+    def on_events(self, events: list[Event], now: float) -> None:
+        for ev in events:
+            self.floaters.append((ev.text, ev.row, now))
+            if ev.kind in ("tspin", "tspin-mini") and ev.center is not None:
+                self.spin_flash = (ev.center, now)
+            for _ in range(_BEEPS[ev.kind]):
+                try:
+                    curses.beep()
+                except curses.error:
+                    pass
+        events.clear()
+        self.floaters[:] = [f for f in self.floaters if now - f[2] < 1.2]
+
+    def shake(self, now: float) -> tuple[int, int]:
+        if now < self.shake_until:
+            return random.choice((-1, 0, 1)), random.choice((-1, 0, 1))
+        return (0, 0)
+
+
 def game_loop(stdscr: curses.window) -> None:
     curses.curs_set(0)
     stdscr.nodelay(True)
@@ -253,55 +357,23 @@ def game_loop(stdscr: curses.window) -> None:
     new_best = False
     rank: int | None = None
     start_time = time.monotonic()
-
-    # Input timing state
-    last_step = 0.0
-    last_rotate = 0.0
-    esc_seq: list[int] = []  # partial arrow-key sequence being reassembled
-    esc_t = 0.0
-
-    # Effect state: floating score text (text, row, born), board shake,
-    # T-spin corner flash ((cx, cy), started).
-    floaters: list[tuple[str, int, float]] = []
-    shake_until = 0.0
-    spin_flash: tuple[tuple[int, int], float] | None = None
+    reader = KeyReader()
+    effects = Effects()
 
     def reset_game() -> None:
-        nonlocal t, new_best, rank, start_time, last_step, shake_until, spin_flash
+        nonlocal t, new_best, rank, start_time
         t = Tetris()
         new_best = False
         rank = None
         start_time = time.monotonic()
-        last_step = 0.0
-        floaters.clear()
-        shake_until = 0.0
-        spin_flash = None
+        reader.reset()
+        effects.clear()
 
     while True:
         now = time.monotonic()
 
         # ---- input -------------------------------------------------
-        raw = stdscr.getch()
-        key = -1
-        if raw != -1:
-            if esc_seq:
-                # Continue (or time out) a split ESC sequence.
-                if now - esc_t > ESC_TTL:
-                    esc_seq = []
-                if not esc_seq:
-                    if raw == 27:
-                        esc_seq = [27]
-                        esc_t = now
-                else:
-                    esc_seq.append(raw)
-                    if len(esc_seq) == 3:
-                        key = ESC_SEQS.get(tuple(esc_seq), -1)
-                        esc_seq = []
-            elif raw == 27:
-                esc_seq = [27]
-                esc_t = now
-            else:
-                key = raw
+        key = reader.next_key(stdscr, now)
         if key in (ord("q"), ord("Q")):
             break
         if key in (ord("r"), ord("R")) and t.game_over:
@@ -313,22 +385,19 @@ def game_loop(stdscr: curses.window) -> None:
                 d = -1 if key == curses.KEY_LEFT else 1
                 # One move per event, throttled — the terminal's auto-repeat
                 # provides the repeat while the key is held.
-                if now - last_step >= STEP_THROTTLE:
+                if reader.allow_step(now):
                     t.move(d, now)
-                    last_step = now
             elif key == curses.KEY_UP:
-                if now - last_rotate >= ROTATE_COOLDOWN:
+                if reader.allow_rotate(now):
                     t.rotate(1, now)
-                    last_rotate = now
             elif key in (ord("z"), ord("Z")):
-                if now - last_rotate >= ROTATE_COOLDOWN:
+                if reader.allow_rotate(now):
                     t.rotate(-1, now)
-                    last_rotate = now
             elif key == curses.KEY_DOWN:
                 t.soft_drop()
             elif key == ord(" "):
                 if t.hard_drop() > 0:
-                    shake_until = now + 0.12
+                    effects.shake_until = now + 0.12
             elif key in (ord("c"), ord("C")):
                 t.hold()
 
@@ -340,17 +409,7 @@ def game_loop(stdscr: curses.window) -> None:
             t.advance_flash()
 
         # ---- effects: floating text, spin flash, beeps ----------------
-        for ev in t.events:
-            floaters.append((ev.text, ev.row, now))
-            if ev.kind in ("tspin", "tspin-mini") and ev.center is not None:
-                spin_flash = (ev.center, now)
-            for _ in range({"clear": 1, "tetris": 2, "tspin": 3, "tspin-mini": 2}[ev.kind]):
-                try:
-                    curses.beep()
-                except curses.error:
-                    pass
-        t.events.clear()
-        floaters[:] = [f for f in floaters if now - f[2] < 1.2]
+        effects.on_events(t.events, now)
 
         # ---- game over ---------------------------------------------------
         if t.game_over and not new_best and rank is None and t.score > 0:
@@ -380,14 +439,12 @@ def game_loop(stdscr: curses.window) -> None:
 
         # Board shake: a 1-cell jitter for a couple of frames after a hard
         # drop or a big clear.
-        ox = oy = 0
-        if now < shake_until:
-            ox, oy = random.choice((-1, 0, 1)), random.choice((-1, 0, 1))
+        ox, oy = effects.shake(now)
 
         draw_board(stdscr, t, bx + ox, by + oy)
 
         # Floating score text, drifting up out of the board.
-        for text, row, born in floaters:
+        for text, row, born in effects.floaters:
             fy = by + oy + row - int((now - born) * 2.5)
             fx = bx + ox + CELL_OFF + max(0, (BOARD_INNER_W - len(text)) // 2)
             try:
@@ -396,10 +453,10 @@ def game_loop(stdscr: curses.window) -> None:
                 pass
 
         # T-spin corner flash: the four diagonals of the T's center.
-        if spin_flash is not None:
-            (cx, cy), st = spin_flash
+        if effects.spin_flash is not None:
+            (cx, cy), st = effects.spin_flash
             if now - st >= 0.6:
-                spin_flash = None
+                effects.spin_flash = None
             else:
                 for dx, dy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
                     px, py = cx + dx, cy + dy

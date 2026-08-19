@@ -12,6 +12,7 @@ from tetris.game import (
     FLASH_FRAMES,
     LOCK_RESET_MAX,
     PIECES,
+    Board,
     HighScores,
     Tetris,
 )
@@ -45,6 +46,31 @@ class TestBagRandomizer:
         for _ in range(50):
             assert t._refill() in PIECES
 
+    def test_injected_rng_is_deterministic(self) -> None:
+        a = Tetris(rng=random.Random(7))
+        b = Tetris(rng=random.Random(7))
+        qa = [a._refill() for _ in range(7)]
+        qb = [b._refill() for _ in range(7)]
+        assert qa == qb
+
+    def test_injected_rng_is_isolated_from_global_state(self) -> None:
+        # Two identically-seeded injected RNGs must agree even when the global
+        # module RNG is reseeded in between — proving the bag uses its own RNG.
+        a = Tetris(rng=random.Random(1))
+        seq_a = [a._refill() for _ in range(7)]
+        random.seed(99999)  # pollute the global module RNG
+        b = Tetris(rng=random.Random(1))
+        seq_b = [b._refill() for _ in range(7)]
+        assert seq_a == seq_b
+
+    def test_default_rng_tracks_global_seed(self) -> None:
+        # Backward-compat default: the module-level RNG still governs.
+        random.seed(5)
+        seq = [Tetris()._refill() for _ in range(7)]
+        random.seed(5)
+        seq2 = [Tetris()._refill() for _ in range(7)]
+        assert seq == seq2
+
 
 # ---------------------------------------------------------------------------
 # Spawning
@@ -64,7 +90,6 @@ class TestSpawning:
         assert all(0 <= x < BOARD_W for x, _ in p.cells())
 
     def test_spawn_advances_next_preview(self, game_state: Tetris) -> None:
-        before = game_state.next_kind
         game_state._spawn()
         # After consuming, the preview holds a (different) drawn piece.
         assert game_state.next_kind in PIECES
@@ -150,7 +175,7 @@ class TestRotation:
         t = Tetris()
         # Fill the board except the piece's current cells so no kick fits.
         t.piece = game.Piece("T", x=4, y=9)
-        t.board = [["T"] * BOARD_W for _ in range(BOARD_H)]
+        t.board = Board.from_rows([["T"] * BOARD_W for _ in range(BOARD_H)])
         for x, y in t.piece.cells():
             t.board[y][x] = ""
         assert not t.rotate(1)
@@ -335,7 +360,7 @@ class TestLineClearing:
         # Position piece so its lock completes the row: simpler — fill row,
         # clear piece cells, then lock.
         t.piece = game.Piece("O", x=4, y=BOARD_H - 2)
-        t.board = [["T"] * BOARD_W for _ in range(BOARD_H)]
+        t.board = Board.from_rows([["T"] * BOARD_W for _ in range(BOARD_H)])
         for x, y in t.piece.cells():
             t.board[y][x] = ""
         t._lock()
@@ -627,7 +652,7 @@ def _tspin_setup(t: Tetris, top_left: bool, top_right: bool, complete: bool) -> 
     cells below (3..5 @ y=18) stay empty, row 19 blocks the floor under
     them. Diagonal corner fills go in row 17; row 18 fills around the T so
     it completes when the T lands (unless complete=False)."""
-    t.board = [[""] * BOARD_W for _ in range(BOARD_H)]
+    t.board = Board.from_rows([[""] * BOARD_W for _ in range(BOARD_H)])
     r17, r18, r19 = t.board[17], t.board[18], t.board[19]
     r17[3] = "J" if top_left else ""
     r17[5] = "J" if top_right else ""
@@ -681,7 +706,7 @@ class TestTSpin:
 
     def test_double_counts_as_b2b(self) -> None:
         t = Tetris()
-        t.board = [[""] * BOARD_W for _ in range(BOARD_H)]
+        t.board = Board.from_rows([[""] * BOARD_W for _ in range(BOARD_H)])
         r16, r17, r18 = t.board[16], t.board[17], t.board[18]
         r16[3] = r16[5] = "J"
         for x in range(BOARD_W):
@@ -697,7 +722,7 @@ class TestTSpin:
 
     def test_non_t_piece_never_spins(self) -> None:
         t = Tetris()
-        t.board = [[""] * BOARD_W for _ in range(BOARD_H)]
+        t.board = Board.from_rows([[""] * BOARD_W for _ in range(BOARD_H)])
         for x in (3, 4, 5):
             t.board[19][x] = "J"
         t.board[17][3] = t.board[17][5] = "J"

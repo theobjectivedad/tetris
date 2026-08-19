@@ -29,6 +29,8 @@ from pathlib import Path
 from mcp.server import MCPServer
 from pyte import Screen, Stream
 
+from ..stats import STAT_LABELS
+
 
 # Directory the game lives in (where `uv run python -m tetris.main` executes).
 # Same project as this server; auto-detection is a dev convenience.
@@ -321,7 +323,7 @@ def tetris_stats() -> str:
     sess = require_session()
     text = "\n".join(sess.text_lines())
     result = []
-    for label in ("SCORE", "BEST", "LINES", "LEVEL", "COMBO", "B2B", "SPINS"):
+    for label in STAT_LABELS:
         # The label sits mid-line, after the board wall — match on word
         # boundary rather than line start.
         m = re.search(rf"\b{label}\s+(\S+)", text)
@@ -368,7 +370,6 @@ def main() -> None:
     # end, stdin EOF), take the game with us — otherwise it is orphaned
     # with a dead pty and keeps spinning.
     def _cleanup() -> None:
-        global session
         if session is not None and session.alive:
             session.stop()
 
