@@ -6,7 +6,9 @@ piece to keep sliding after a single tap.
 """
 
 import curses
+import json
 import random
+import re
 
 from tetris import main
 from tetris.game import Piece
@@ -30,6 +32,9 @@ class FakeScreen:
         self.cols = cols
         self.events = list(events or [])
         self.grid: dict[tuple[int, int], str] = {}
+        # Snapshot of the grid at every refresh — lets tests inspect
+        # intermediate frames (e.g. a modal that is open mid-run).
+        self.frames: list[dict[tuple[int, int], str]] = []
 
     def nodelay(self, flag: bool) -> None:
         pass
@@ -54,7 +59,7 @@ class FakeScreen:
             self.grid[(y, x + i)] = ch
 
     def refresh(self) -> None:
-        pass
+        self.frames.append(dict(self.grid))
 
 
 fake_time = FakeTime()
@@ -62,11 +67,17 @@ fake_time = FakeTime()
 
 def run_game(events: list[tuple[float, int]], duration: float = 2.0, seed: int = 99) -> FakeScreen:
     """Run game_loop with scripted key events; returns the fake screen.
-    The RNG is seeded so every run starts with the identical piece queue."""
+    The RNG is seeded so every run starts with the identical piece queue.
+
+    Two terminating q's are appended at ``duration``: the first closes a
+    modal if one is open (Q never quits from inside a modal), the second
+    then quits — so runs terminate no matter what state they end in.
+    """
     global fake_time
     random.seed(seed)
     fake_time = FakeTime()
     scr = FakeScreen(events=events)
+    scr.events.append((duration, ord("q")))
     scr.events.append((duration, ord("q")))
 
     real_time, real_curses = main.time, main.curses
@@ -89,6 +100,24 @@ def run_game(events: list[tuple[float, int]], duration: float = 2.0, seed: int =
     return scr
 
 
+def piece_cols_from_grid(grid: dict[tuple[int, int], str], by: int, bx: int) -> set[int]:
+    """Board columns of the live piece in a rendered grid (see piece_cols)."""
+    lo, hi = bx + 1, bx + 20
+    top_row = None
+    for (y, x), ch in grid.items():
+        if ch == "█" and by + 1 <= y <= by + 20 and lo <= x <= hi:  # noqa: SIM102
+            if top_row is None or y < top_row:
+                top_row = y
+    if top_row is None:
+        return set()
+    # Cells are 2 chars wide, contiguous (no gap).
+    return {
+        (x - lo) // 2
+        for (y, x), ch in grid.items()
+        if ch == "█" and y == top_row and lo <= x <= hi
+    }
+
+
 def piece_cols(scr: FakeScreen) -> set[int]:
     """Board columns of the live piece (topmost █ cells in the cell area).
 
@@ -99,20 +128,23 @@ def piece_cols(scr: FakeScreen) -> set[int]:
     """
     by = max(1, (scr.rows - 27) // 2)
     bx = (scr.cols - 42) // 2
-    lo, hi = bx + 1, bx + 20
-    top_row = None
-    for (y, x), ch in scr.grid.items():
-        if ch == "█" and by + 1 <= y <= by + 20 and lo <= x <= hi:  # noqa: SIM102
-            if top_row is None or y < top_row:
-                top_row = y
-    if top_row is None:
-        return set()
-    # Cells are 2 chars wide, contiguous (no gap).
-    return {
-        (x - lo) // 2
-        for (y, x), ch in scr.grid.items()
-        if ch == "█" and y == top_row and lo <= x <= hi
-    }
+    return piece_cols_from_grid(scr.grid, by, bx)
+
+
+def grid_to_text(scr: FakeScreen) -> str:
+    """Flatten the final frame into full-width row-major text."""
+    return grid_to_text_for_frame(scr.grid, scr.cols)
+
+
+def grid_to_text_for_frame(grid: dict[tuple[int, int], str], cols: int) -> str:
+    """Flatten one rendered frame into full-width row-major text."""
+    rows: dict[int, dict[int, str]] = {}
+    for (y, x), ch in grid.items():
+        rows.setdefault(y, {})[x] = ch
+    return "\n".join(
+        "".join(cells.get(x, " ") for x in range(cols))
+        for _, cells in sorted(rows.items())
+    )
 
 
 def test_single_tap_moves_exactly_one_cell(monkeypatch) -> None:
@@ -172,22 +204,15 @@ def test_score_popup_renders_after_line_clear(monkeypatch) -> None:
     monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_scores.json")
 
     class RiggedTetris(main.Tetris):
-        def __init__(self) -> None:
-            super().__init__()
+        def __init__(self, start_level: int = 1) -> None:
+            super().__init__(start_level=start_level)
             self.board[BOARD_H - 1] = ["J"] * 4 + ["", ""] + ["J"] * 5
             self.piece = Piece("O", 4, 0)
 
     monkeypatch.setattr(main, "Tetris", RiggedTetris)
     scr = run_game(events=[(0.2, ord(" "))], duration=1.2)
 
-    rows: dict[int, dict[int, str]] = {}
-    for (y, x), ch in scr.grid.items():
-        rows.setdefault(y, {})[x] = ch
-    text = "\n".join(
-        "".join(cells.get(x, " ") for x in range(scr.cols))
-        for _, cells in sorted(rows.items())
-    )
-    assert "SINGLE" in text
+    assert "SINGLE" in grid_to_text(scr)
 
 
 def test_split_esc_sequence_reassembles_into_arrow_key(monkeypatch) -> None:
@@ -209,3 +234,131 @@ def test_split_esc_sequence_reassembles_into_arrow_key(monkeypatch) -> None:
     base2_cols = piece_cols(base2)
     split_left = run_game(events=[(0.5, 27), (0.52, 0x5B), (0.54, ord("D"))])
     assert piece_cols(split_left) == {c - 1 for c in base2_cols}
+
+
+# -- modal dialogs -------------------------------------------------------------
+
+
+def test_no_always_on_legend_in_sidebar(monkeypatch) -> None:
+    """The key legend no longer renders in the sidebar at all times — it
+    lives in the help modal now (cleaner main screen)."""
+    monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_nolegend.json")
+
+    text = grid_to_text(run_game(events=[], duration=0.5))
+    assert "S settings" not in text
+    assert "Q quit" not in text
+
+
+def test_help_modal_shows_legend_and_version(monkeypatch) -> None:
+    """? opens the HELP modal containing the key legend and the version.
+    (Asserted on a mid-run frame: the run's final frame is the quit.)"""
+    monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_help.json")
+
+    scr = run_game(events=[(0.3, ord("?"))], duration=1.0)
+    # The modal is open from t=0.3 until the terminating q's at t=1.0.
+    text = "\n".join(grid_to_text_for_frame(f, scr.cols) for f in scr.frames[40:60])
+    assert "HELP" in text
+    assert "S settings" in text
+    assert "Q quit" in text
+    assert re.search(r"v\d", text)
+
+
+def test_help_modal_closes_on_q_without_quitting(monkeypatch) -> None:
+    """Q while a modal is open closes the dialog, not the game: the next
+    frame shows normal play, and the run only ends on the final q."""
+    monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_help2.json")
+
+    scr = run_game(events=[(0.3, ord("?")), (0.6, ord("q"))], duration=1.0)
+    text = grid_to_text(scr)
+    assert "HELP" not in text
+    assert "SETTINGS" not in text
+
+
+def test_settings_menu_cycles_and_persists(monkeypatch, tmp_path) -> None:
+    """s opens SETTINGS; down+right cycles the option and persists the new
+    value through the unified state file (scores + settings in one doc)."""
+    path = tmp_path / "state.json"
+    monkeypatch.setenv("TETRIS_SCORES", str(path))
+
+    scr = run_game(
+        events=[(0.3, ord("s")), (0.5, curses.KEY_DOWN), (0.6, curses.KEY_RIGHT)],
+        duration=1.0,
+    )
+    # Mid-run frame while the menu is still open.
+    text = "\n".join(grid_to_text_for_frame(f, scr.cols) for f in scr.frames[40:60])
+    assert "SETTINGS" in text
+
+    data = json.loads(path.read_text())
+    # cursor down from start_level to ghost (default True); right wraps to False
+    assert data["settings"]["ghost"] is False
+    assert "scores" in data  # unified document holds both
+
+
+def test_settings_menu_closes_on_q(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "state.json"
+    monkeypatch.setenv("TETRIS_SCORES", str(path))
+
+    scr = run_game(events=[(0.3, ord("s")), (0.6, ord("q"))], duration=1.0)
+    text = grid_to_text(scr)
+    assert "SETTINGS" not in text
+
+
+def test_settings_menu_is_paused(monkeypatch, tmp_path) -> None:
+    """The game does not fall while the settings menu is open: the piece's
+    columns in a mid-run frame (menu open) equal a fresh run's position."""
+    path = tmp_path / "state.json"
+    monkeypatch.setenv("TETRIS_SCORES", str(path))
+
+    by = max(1, (30 - 27) // 2)  # must match main.game_loop's layout math
+    bx = (60 - 42) // 2
+
+    with_menu = run_game(events=[(0.3, ord("s"))], duration=2.0)
+    # ~t=1.0: the menu has been open (since 0.3) for a full second — the
+    # piece would have fallen a few rows by now if gravity were running.
+    paused_cols = piece_cols_from_grid(with_menu.frames[50], by, bx)
+
+    fresh = run_game(events=[], duration=0.3)
+    assert paused_cols == piece_cols(fresh)
+
+
+def test_game_over_uses_modal_without_timer(monkeypatch) -> None:
+    """Game over renders as the centered GAME OVER modal (R replay) and no
+    longer shows the elapsed-time line."""
+    monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_over.json")
+
+    class OverTetris(main.Tetris):
+        def __init__(self, start_level: int = 1) -> None:
+            super().__init__(start_level=start_level)
+            self.game_over = True
+            self.score = 1234
+
+    monkeypatch.setattr(main, "Tetris", OverTetris)
+    scr = run_game(events=[], duration=0.5)
+    text = grid_to_text(scr)
+    assert "GAME OVER" in text
+    assert "R replay" in text
+    assert "Time" not in text
+
+
+def test_ghost_setting_toggles_ghost_piece(monkeypatch, tmp_path) -> None:
+    """The 'drop shadow' setting: the ghost (▒) renders by default and is
+    absent when ghost=false is saved in the state file."""
+    path = tmp_path / "state.json"
+    monkeypatch.setenv("TETRIS_SCORES", str(path))
+
+    on = grid_to_text(run_game(events=[], duration=1.0))
+    assert "\u2592" in on  # ▒ ghost cells
+
+    path.write_text(json.dumps({"settings": {"ghost": False}}))
+    off = grid_to_text(run_game(events=[], duration=1.0))
+    assert "\u2592" not in off
+
+
+def test_hold_off_renders_off_in_hold_box(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({"settings": {"hold": False}}))
+    monkeypatch.setenv("TETRIS_SCORES", str(path))
+
+    text = grid_to_text(run_game(events=[], duration=0.5))
+    assert "HOLD" in text
+    assert "off" in text

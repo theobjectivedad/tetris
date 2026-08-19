@@ -251,7 +251,7 @@ def tetris_start(width: int = 60, height: int = 30) -> str:
     return (
         f"game running (pid {sess.pid}) in a {width}×{height} virtual terminal.\n"
         "Keys: left/right move, up/Z rotate, down soft drop, space hard drop, "
-        "c hold, p pause, r restart, q quit.\n"
+        "c hold, p pause, ? help, s settings, r restart, q quit.\n"
         "Use tetris_key to send input, tetris_wait to let time pass, "
         "tetris_screen to view the screen, tetris_stats for score/level/lines."
     )

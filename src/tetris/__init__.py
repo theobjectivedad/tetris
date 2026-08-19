@@ -1,8 +1,10 @@
 """Terminal Tetris.
 
 Submodules:
-    game  — pure game logic (fully unit-tested, no I/O)
-    main  — curses UI & input (run with ``python -m tetris.main``)
+    game      — pure game logic facade (fully unit-tested, no I/O)
+    settings  — user settings model (pure data, no I/O)
+    state     — unified persistence: high scores + settings in one file
+    main      — curses UI & input (run with ``python -m tetris.main``)
 """
 
 from importlib.metadata import PackageNotFoundError, version

@@ -1,4 +1,9 @@
-"""Terminal Tetris — curses UI for the game logic in tetris.game."""
+"""Terminal Tetris — curses UI for the game logic in tetris.game.
+
+Screens: the board + sidebar, plus centered modal dialogs (help on `?`,
+settings menu on `s`, game over). All high scores and user settings are
+loaded and saved through the unified store in ``tetris.state``.
+"""
 
 from __future__ import annotations
 
@@ -13,9 +18,10 @@ from .game import (
     BOARD_W,
     PIECES,
     Event,
-    HighScores,
     Tetris,
 )
+from .settings import OPTIONS, Settings, cycle, format_value, value_of
+from .state import GameState
 from .stats import sidebar_stats
 
 # Colors: pair index -> piece kind
@@ -30,6 +36,11 @@ BOARD_INNER_W = BOARD_W * BOARD_PITCH  # 20
 BOARD_WALL = 1
 BOARD_W_DRAWN = BOARD_INNER_W + 2 * BOARD_WALL  # 22
 CELL_OFF = BOARD_WALL  # cell x=0 is drawn at bx + CELL_OFF
+
+# Minimum terminal size: the board block (22) + gap (4) + sidebar (16) wide;
+# the sidebar is the tallest element (stats + NEW BEST indicator).
+NEED_W = BOARD_W_DRAWN + 4 + 16  # 42
+NEED_H = 25
 
 # Key handling tuning
 # Terminals deliver their own auto-repeat while a key is held, so we just
@@ -79,6 +90,108 @@ def cell_attr(kind: str) -> int:
     return curses.color_pair(COLORS[kind]) if curses.has_colors() else 0
 
 
+# -- modal dialogs -----------------------------------------------------------
+
+
+class Modal:
+    """A centered dialog box drawn over the gameplay screen.
+
+    ``lines`` are centered inside the box; ``cursor`` (an index into
+    ``lines``) renders that row as a full-width reverse bar — used by the
+    settings menu. The box is opaque: every interior cell is written, so
+    whatever the game drew behind it is covered.
+    """
+
+    def __init__(self, title: str, lines: list[str], cursor: int | None = None) -> None:
+        self.title = title
+        self.lines = lines
+        self.cursor = cursor
+
+
+def draw_modal(stdscr: curses.window, modal: Modal, max_x: int, max_y: int) -> None:
+    """Render ``modal`` centered in the window."""
+    width = max(len(modal.title), max((len(l) for l in modal.lines), default=0)) + 6
+    height = len(modal.lines) + 2
+    width = min(width, max_x - 2)
+    height = min(height, max_y - 2)
+    bx = (max_x - width) // 2
+    by = (max_y - height) // 2
+    inner = width - 2
+
+    try:
+        # Top border with the title centered inside it.
+        gap = inner - len(modal.title) - 2
+        left = gap // 2
+        stdscr.addstr(
+            by, bx,
+            "┌" + "─" * left + f" {modal.title} " + "─" * (gap - left) + "┐",
+            curses.A_DIM,
+        )
+        for i, line in enumerate(modal.lines):
+            y = by + 1 + i
+            is_cursor = modal.cursor is not None and i == modal.cursor
+            stdscr.addstr(y, bx, "│", curses.A_DIM)
+            stdscr.addstr(y, bx + width - 1, "│", curses.A_DIM)
+            # Opaque interior: blank every cell so the board/sidebar behind
+            # the box cannot bleed through the padding.
+            if is_cursor:
+                stdscr.addstr(y, bx + 1, " " * inner, curses.A_REVERSE)
+            else:
+                stdscr.addstr(y, bx + 1, " " * inner)
+            if line:
+                stdscr.addstr(
+                    y, bx + 1 + (inner - len(line)) // 2, line,
+                    curses.A_REVERSE if is_cursor else 0,
+                )
+        stdscr.addstr(by + height - 1, bx, "└" + "─" * inner + "┘", curses.A_DIM)
+    except curses.error:
+        pass
+
+
+def build_help_modal() -> Modal:
+    """The `?` help dialog: the key legend plus the version.
+
+    This is the single place the key map is documented for the player —
+    it no longer sits in the sidebar at all times.
+    """
+    lines = [
+        "←/→ move        ↑ rotate CW    Z rotate CCW",
+        "↓ soft drop     SPACE hard drop",
+        "C hold          P pause",
+        "S settings      ? help",
+        "R replay (at game over)    Q quit",
+        "",
+        "Q or ? closes this dialog",
+        "",
+        f"v{__version__}",
+    ]
+    return Modal("HELP", lines)
+
+
+def build_game_over_modal(t: Tetris, best: int, rank: int | None) -> Modal:
+    """The game-over dialog, shown as a modal instead of inside the board."""
+    lines = [
+        f"Score:  {t.score:,}",
+        f"Lines {t.lines}    Level {t.level}",
+        f"Pieces {t.pieces}",
+    ]
+    if rank is not None:
+        lines.append("★ New high score ★")
+    else:
+        lines.append(f"Best:   {best:,}")
+    lines += ["", "R replay       Q quit"]
+    return Modal("GAME OVER", lines)
+
+
+def build_settings_modal(settings: Settings, cursor: int) -> Modal:
+    """The `s` settings dialog: one row per option, cursor row highlighted."""
+    lines = [
+        f"{opt.label:<14} {format_value(value_of(settings, opt.key))}" for opt in OPTIONS
+    ]
+    lines += ["", "↑/↓ select      ←/→ change      Q close"]
+    return Modal("SETTINGS", lines, cursor=cursor)
+
+
 def draw_box(stdscr: curses.window, title: str, bx: int, by: int, w: int, h: int = 6) -> tuple[int, int]:
     """Draw a titled box; returns (inner_x, inner_y)."""
     border = f"┌{'─' * (w - 2)}┐"
@@ -116,7 +229,7 @@ def draw_piece_preview(stdscr: curses.window, kind: str, ix: int, iy: int, dim: 
                     pass
 
 
-def draw_board(stdscr: curses.window, t: Tetris, bx: int, by: int) -> None:
+def draw_board(stdscr: curses.window, t: Tetris, bx: int, by: int, show_ghost: bool = True) -> None:
     # Solid border around the play area. The walls are outside the cell
     # area (1 col per side), so blocks never render on top of them.
     right = bx + BOARD_W_DRAWN - 1
@@ -133,9 +246,10 @@ def draw_board(stdscr: curses.window, t: Tetris, bx: int, by: int) -> None:
     ghost_cells: set[tuple[int, int]] = set()
     live_cells: dict[tuple[int, int], str] = {}
     if not t.game_over:
-        ghost_cells = {
-            (dx + t.piece.x, t.ghost_y() + dy) for dx, dy in PIECES[t.piece.kind][t.piece.rot]
-        }
+        if show_ghost:
+            ghost_cells = {
+                (dx + t.piece.x, t.ghost_y() + dy) for dx, dy in PIECES[t.piece.kind][t.piece.rot]
+            }
         live_cells = {(x, y): t.piece.kind for x, y in t.piece.cells() if y >= 0}
 
     for y in range(BOARD_H):
@@ -171,80 +285,34 @@ def draw_board(stdscr: curses.window, t: Tetris, bx: int, by: int) -> None:
                 pass
 
 
-def draw_sidebar(stdscr: curses.window, t: Tetris, hs: HighScores, by: int, sx: int, new_best: bool) -> None:
+def draw_sidebar(stdscr: curses.window, t: Tetris, state: GameState, by: int, sx: int, new_best: bool) -> None:
     hold_x, hold_y = draw_box(stdscr, "HOLD", sx, by, 14, 6)
-    draw_piece_preview(stdscr, t.holding or "", hold_x, hold_y, dim=not t.can_hold)
+    if state.settings.hold:
+        draw_piece_preview(stdscr, t.holding or "", hold_x, hold_y, dim=not t.can_hold)
+    else:
+        # Hold disabled: show a dimmed "off" in the box instead of a preview.
+        try:
+            stdscr.addstr(hold_y, sx + 5, "off", curses.A_DIM)
+        except curses.error:
+            pass
 
     next_x, next_y = draw_box(stdscr, "NEXT", sx, by + 7, 14, 8)
     draw_piece_preview(stdscr, t.next_kind, next_x, next_y)
     draw_piece_preview(stdscr, t.next_kind2, next_x, next_y + 3, dim=True)
 
-    stats = sidebar_stats(t.snapshot(), hs.best())
+    stats = sidebar_stats(t.snapshot(), state.best())
     for i, (label, value) in enumerate(stats):
         try:
             stdscr.addstr(by + 16 + i, sx, f"{label:<7}{value}", curses.color_pair(8))
         except curses.error:
             pass
 
-    controls = [
-        "←/→ move    ↑/Z rotate",
-        "↓ soft drop  SPACE hard",
-        "C hold   P pause",
-        "Q quit",
-    ]
-    for i, line in enumerate(controls):
-        try:
-            stdscr.addstr(by + 24 + i, sx, line, curses.A_DIM)
-        except curses.error:
-            pass
-
-    # Version, right-aligned just below the controls menu.
-    try:
-        vtxt = f"v{__version__}"
-        x = sx + 15 - len(vtxt)
-        if x < sx:  # too long to fit; truncate and left-align within the menu
-            vtxt = vtxt[:15]
-            x = sx
-        stdscr.addstr(by + 29, x, vtxt, curses.A_DIM)
-    except curses.error:
-        pass
+    # The key legend and version no longer live here — they moved to the
+    # help modal (`?`) to keep the main screen clean for the player.
 
     if new_best:
         try:
-            stdscr.addstr(by + 32, sx, "★ NEW BEST ★", curses.A_REVERSE | curses.A_BLINK)
-        except curses.error:
-            pass
-
-
-def draw_game_over(stdscr: curses.window, t: Tetris, hs: HighScores, elapsed: float, rank: int | None, bx: int, by: int) -> None:
-    interior_w = BOARD_INNER_W  # the cell area, inside the walls
-    lines = [
-        "GAME OVER",
-        "",
-        f"Score:  {t.score:,}",
-        f"Lines {t.lines}  Level {t.level}",
-        f"Time {int(elapsed // 60):02d}:{int(elapsed % 60):02d}  Pcs {t.pieces}",
-    ]
-    if rank is not None:
-        lines.append("★ New high score ★")
-    else:
-        lines.append(f"Best:   {hs.best():,}")
-    lines += ["", "R replay      Q quit"]
-
-    # darkening overlay behind the message (drawn first, text on top)
-    for y in range(BOARD_H):
-        try:
-            stdscr.addstr(by + y + 1, bx + CELL_OFF, " " * interior_w)
-        except curses.error:
-            pass
-
-    start_y = by + BOARD_H // 2 - len(lines) // 2
-    for i, line in enumerate(lines):
-        try:
-            attr = curses.A_REVERSE if line == "GAME OVER" else (
-                curses.color_pair(9) if "★" in line else 0
-            )
-            stdscr.addstr(start_y + i, bx + CELL_OFF + max(0, (interior_w - len(line)) // 2), line, attr)
+            stdscr.addstr(by + 24, sx, "★ NEW BEST ★", curses.A_REVERSE | curses.A_BLINK)
         except curses.error:
             pass
 
@@ -321,6 +389,7 @@ class Effects:
         self.floaters: list[tuple[str, int, float]] = []
         self.shake_until = 0.0
         self.spin_flash: tuple[tuple[int, int], float] | None = None
+        self.sound = True  # gated per frame from the user's sound setting
 
     def clear(self) -> None:
         self.floaters.clear()
@@ -332,11 +401,12 @@ class Effects:
             self.floaters.append((ev.text, ev.row, now))
             if ev.kind in ("tspin", "tspin-mini") and ev.center is not None:
                 self.spin_flash = (ev.center, now)
-            for _ in range(_BEEPS[ev.kind]):
-                try:
-                    curses.beep()
-                except curses.error:
-                    pass
+            if self.sound:
+                for _ in range(_BEEPS[ev.kind]):
+                    try:
+                        curses.beep()
+                    except curses.error:
+                        pass
         events.clear()
         self.floaters[:] = [f for f in self.floaters if now - f[2] < 1.2]
 
@@ -352,22 +422,37 @@ def game_loop(stdscr: curses.window) -> None:
     stdscr.keypad(True)
     init_colors()
 
-    hs = HighScores()
-    t = Tetris()
+    state = GameState()
+    t = Tetris(start_level=state.settings.start_level)
     new_best = False
     rank: int | None = None
-    start_time = time.monotonic()
     reader = KeyReader()
     effects = Effects()
+    menu: str | None = None  # None | "help" | "settings"
+    menu_cursor = 0
+    was_paused = False
 
     def reset_game() -> None:
-        nonlocal t, new_best, rank, start_time
-        t = Tetris()
+        nonlocal t, new_best, rank, menu, was_paused
+        t = Tetris(start_level=state.settings.start_level)
         new_best = False
         rank = None
-        start_time = time.monotonic()
+        menu = None
+        was_paused = False
         reader.reset()
         effects.clear()
+
+    def open_menu(kind: str) -> None:
+        """Open a modal menu; the game is paused for its duration."""
+        nonlocal menu, was_paused
+        was_paused = t.paused
+        t.paused = True
+        menu = kind
+
+    def close_menu() -> None:
+        nonlocal menu
+        t.paused = was_paused
+        menu = None
 
     while True:
         now = time.monotonic()
@@ -375,12 +460,34 @@ def game_loop(stdscr: curses.window) -> None:
         # ---- input -------------------------------------------------
         key = reader.next_key(stdscr, now)
         if key in (ord("q"), ord("Q")):
-            break
-        if key in (ord("r"), ord("R")) and t.game_over:
+            if menu is not None:
+                close_menu()  # in a modal, Q closes the dialog, never quits
+            else:
+                break
+        elif key in (ord("r"), ord("R")) and t.game_over:
             reset_game()
-        elif key in (ord("p"), ord("P")):
+        elif key == ord("?") and not t.game_over:
+            if menu == "help":
+                close_menu()  # ? toggles the help dialog
+            elif menu is None:
+                open_menu("help")
+        elif key in (ord("s"), ord("S")) and menu is None and not t.game_over:
+            menu_cursor = 0
+            open_menu("settings")
+        elif key in (ord("p"), ord("P")) and menu is None:
             t.paused = not t.paused
-        elif not t.paused and not t.game_over:
+        elif menu == "settings" and not t.game_over:
+            if key in (curses.KEY_UP, ord("k")):
+                menu_cursor = (menu_cursor - 1) % len(OPTIONS)
+            elif key in (curses.KEY_DOWN, ord("j")):
+                menu_cursor = (menu_cursor + 1) % len(OPTIONS)
+            elif key in (curses.KEY_RIGHT, curses.KEY_LEFT, ord(" "), curses.KEY_ENTER):
+                d = -1 if key == curses.KEY_LEFT else 1
+                opt = OPTIONS[menu_cursor]
+                new_settings = cycle(state.settings, opt.key, d)
+                # Persist immediately through the single state store.
+                state.update_settings(**{opt.key: value_of(new_settings, opt.key)})
+        elif menu is None and not t.paused and not t.game_over:
             if key in (curses.KEY_LEFT, curses.KEY_RIGHT):
                 d = -1 if key == curses.KEY_LEFT else 1
                 # One move per event, throttled — the terminal's auto-repeat
@@ -396,10 +503,11 @@ def game_loop(stdscr: curses.window) -> None:
             elif key == curses.KEY_DOWN:
                 t.soft_drop()
             elif key == ord(" "):
-                if t.hard_drop() > 0:
+                if t.hard_drop() > 0 and state.settings.shake:
                     effects.shake_until = now + 0.12
             elif key in (ord("c"), ord("C")):
-                t.hold()
+                if state.settings.hold:
+                    t.hold()
 
         # ---- gravity + lock delay ------------------------------------
         t.tick(now)
@@ -409,30 +517,29 @@ def game_loop(stdscr: curses.window) -> None:
             t.advance_flash()
 
         # ---- effects: floating text, spin flash, beeps ----------------
+        effects.sound = state.settings.sound
         effects.on_events(t.events, now)
 
         # ---- game over ---------------------------------------------------
         if t.game_over and not new_best and rank is None and t.score > 0:
-            rank = hs.record(t.score, t.lines, t.level)
+            rank = state.record(t.score, t.lines, t.level)
             if rank is not None:
                 new_best = True
 
         # ---- draw ----------------------------------------------------
         max_y, max_x = stdscr.getmaxyx()
         sidebar_x_offset = BOARD_W_DRAWN + 4
-        total_w = sidebar_x_offset + 16
-        need_h = BOARD_H + 9  # board block + sidebar (incl. controls) must fit
-        if max_x < total_w or max_y < need_h:
+        if max_x < NEED_W or max_y < NEED_H:
             stdscr.erase()
             try:
-                stdscr.addstr(1, 1, f"Terminal too small — need {total_w}×{need_h}, got {max_x}×{max_y}")
+                stdscr.addstr(1, 1, f"Terminal too small — need {NEED_W}×{NEED_H}, got {max_x}×{max_y}")
             except curses.error:
                 pass
             stdscr.refresh()
             time.sleep(FRAME)
             continue
 
-        bx = max(0, (max_x - total_w) // 2)
+        bx = max(0, (max_x - NEED_W) // 2)
         by = max(1, (max_y - (BOARD_H + 7)) // 2)
 
         stdscr.erase()
@@ -441,7 +548,7 @@ def game_loop(stdscr: curses.window) -> None:
         # drop or a big clear.
         ox, oy = effects.shake(now)
 
-        draw_board(stdscr, t, bx + ox, by + oy)
+        draw_board(stdscr, t, bx + ox, by + oy, show_ghost=state.settings.ghost)
 
         # Floating score text, drifting up out of the board.
         for text, row, born in effects.floaters:
@@ -469,9 +576,15 @@ def game_loop(stdscr: curses.window) -> None:
                     except curses.error:
                         pass
 
-        draw_sidebar(stdscr, t, hs, by, bx + sidebar_x_offset, new_best)
+        draw_sidebar(stdscr, t, state, by, bx + sidebar_x_offset, new_best)
+
+        # ---- modals: game over / help / settings ---------------------
         if t.game_over:
-            draw_game_over(stdscr, t, hs, time.monotonic() - start_time, rank, bx, by)
+            draw_modal(stdscr, build_game_over_modal(t, state.best(), rank), max_x, max_y)
+        elif menu == "help":
+            draw_modal(stdscr, build_help_modal(), max_x, max_y)
+        elif menu == "settings":
+            draw_modal(stdscr, build_settings_modal(state.settings, menu_cursor), max_x, max_y)
         elif t.paused:
             try:
                 stdscr.addstr(by + BOARD_H // 2, bx + (BOARD_W_DRAWN - 8) // 2, " PAUSED ", curses.A_REVERSE)
