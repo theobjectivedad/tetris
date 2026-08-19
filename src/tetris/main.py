@@ -43,10 +43,11 @@ NEED_W = BOARD_W_DRAWN + 4 + 16  # 42
 NEED_H = 30
 
 # Key handling tuning
-# Terminals deliver their own auto-repeat while a key is held, so we just
-# throttle consecutive moves. This also guards against a single tap producing
-# multiple events (e.g. escape-sequence artifacts).
-STEP_THROTTLE = 0.04  # min interval between horizontal moves
+# Tap = one move; holding streams after DAS at the ARR rate (self-driven,
+# not dependent on the terminal's slow initial auto-repeat delay).
+DAS = 0.17           # delay after the first tap before held-key streaming
+ARR = 0.04           # auto-repeat rate (min interval between moves) while held
+HOLD_WINDOW = 0.06  # a dir-key event within this window counts as "still held"
 ROTATE_COOLDOWN = 0.12
 FRAME = 0.02          # main loop frame time (50 fps)
 ESC_TTL = 0.15        # how long a partial ESC sequence is kept while reassembling
@@ -332,14 +333,18 @@ class KeyReader:
     """
 
     def __init__(self) -> None:
-        self.last_step = 0.0
         self.last_rotate = 0.0
         self._esc_seq: list[int] = []
         self._esc_t = 0.0
+        self._dir = 0              # active hold direction (-1/1), 0 = none
+        self._dir_since = 0.0      # when the current hold started
+        self._last_dir_event = 0.0
+        self._last_move = 0.0
 
     def reset(self) -> None:
-        # Restart only resets the move throttle (matches pre-refactor behavior).
-        self.last_step = 0.0
+        # Restart/menu resets the move throttle and any in-flight hold.
+        self._last_move = 0.0
+        self._dir = 0
 
     def next_key(self, stdscr: curses.window, now: float) -> int:
         """Return the next logical key, or -1 if no input is pending.
@@ -370,11 +375,38 @@ class KeyReader:
             key = raw
         return key
 
-    def allow_step(self, now: float) -> bool:
-        if now - self.last_step >= STEP_THROTTLE:
-            self.last_step = now
-            return True
-        return False
+    def on_direction(self, d: int, now: float) -> bool:
+        """Handle a left/right key event; True if the piece should move.
+
+        A fresh press (or direction change) moves immediately. While the key
+        stays held the terminal's auto-repeat keeps events arriving; DAS/ARR
+        streaming (auto_direction) takes over after the DAS delay.
+        """
+        fresh = self._dir != d
+        if fresh:
+            self._dir = d
+            self._dir_since = now
+        self._last_dir_event = now
+        if now - self._last_move < ARR:
+            return False  # anti double-fire (e.g. ESC reassembly artifact)
+        if not fresh and now - self._dir_since < DAS:
+            return False  # held, but the DAS delay hasn't elapsed yet
+        self._last_move = now
+        return True
+
+    def auto_direction(self, now: float) -> int:
+        """Direction to auto-move this frame (DAS/ARR streaming), or 0.
+
+        The terminal gives no key-release event, so "held" means a direction
+        event arrived within HOLD_WINDOW; after a real release the window
+        expires and streaming stops (at most one extra step).
+        """
+        if self._dir == 0 or now - self._last_dir_event > HOLD_WINDOW:
+            return 0
+        if now - self._dir_since < DAS or now - self._last_move < ARR:
+            return 0
+        self._last_move = now
+        return self._dir
 
     def allow_rotate(self, now: float) -> bool:
         if now - self.last_rotate >= ROTATE_COOLDOWN:
@@ -441,6 +473,7 @@ def game_loop(stdscr: curses.window) -> None:
         rank = None
         menu = None
         was_paused = False
+        # Restart/menu: also clear any in-flight held-key stream.
         reader.reset()
         effects.clear()
 
@@ -450,6 +483,7 @@ def game_loop(stdscr: curses.window) -> None:
         was_paused = t.paused
         t.paused = True
         menu = kind
+        reader.reset()  # no stale holds may survive a menu round-trip
 
     def close_menu() -> None:
         nonlocal menu
@@ -492,9 +526,8 @@ def game_loop(stdscr: curses.window) -> None:
         elif menu is None and not t.paused and not t.game_over:
             if key in (curses.KEY_LEFT, curses.KEY_RIGHT):
                 d = -1 if key == curses.KEY_LEFT else 1
-                # One move per event, throttled — the terminal's auto-repeat
-                # provides the repeat while the key is held.
-                if reader.allow_step(now):
+                # One move per fresh press; holding streams at ARR after DAS.
+                if reader.on_direction(d, now):
                     t.move(d, now)
             elif key == curses.KEY_UP:
                 if reader.allow_rotate(now):
@@ -510,6 +543,12 @@ def game_loop(stdscr: curses.window) -> None:
             elif key in (ord("c"), ord("C")):
                 if state.settings.hold:
                     t.hold()
+
+        # ---- DAS/ARR streaming (held-key moves without new events) -------
+        if menu is None and not t.paused and not t.game_over:
+            auto = reader.auto_direction(now)
+            if auto:
+                t.move(auto, now)
 
         # ---- gravity + lock delay ------------------------------------
         t.tick(now)

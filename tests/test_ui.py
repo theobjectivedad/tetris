@@ -9,6 +9,7 @@ import curses
 import json
 import random
 import re
+from itertools import pairwise
 
 from tetris import main
 from tetris.game import Piece
@@ -374,3 +375,87 @@ def test_next_box_shows_five_previews() -> None:
     for off in (0, 2, 4, 6, 8):  # preview slots at inner rows +0/+2/+4/+6/+8
         row = by + 8 + off
         assert "\u2588" in lines[row][sx : sx + 14], f"preview missing at slot {off}"
+
+
+# ---------------------------------------------------------------------------
+# DAS/ARR held-key movement
+# ---------------------------------------------------------------------------
+
+
+def _counting_moves(monkeypatch):
+    """Patch Tetris with a subclass that records every move() call."""
+    calls = []
+
+    class CountingTetris(main.Tetris):
+        def move(self, dx, now=None):
+            calls.append((dx, now if now is not None else 0.0))
+            return super().move(dx, now)
+
+    monkeypatch.setattr(main, "Tetris", CountingTetris)
+    return calls
+
+
+def _near(a: float, b: float) -> bool:
+    return abs(a - b) < 1e-9
+
+
+def test_das_single_tap_is_exactly_one_move(monkeypatch) -> None:
+    """A lone key event moves the piece exactly once — never streams."""
+    monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_das.json")
+    calls = _counting_moves(monkeypatch)
+    run_game(events=[(0.5, curses.KEY_LEFT)], duration=2.0)
+    assert len(calls) == 1 and calls[0][0] == -1 and _near(calls[0][1], 0.5)
+
+
+def test_das_held_key_streams_after_delay(monkeypatch) -> None:
+    """Held key: one tap move, a DAS gap with no moves, then ~40ms (ARR)
+    streaming that stops shortly after the last event (no release event
+    exists, so the hold window bounds the tail)."""
+    monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_das.json")
+    calls = _counting_moves(monkeypatch)
+    events = [(0.5 + i * 0.035, curses.KEY_LEFT) for i in range(8)]  # 0.5..0.745
+    run_game(events=events, duration=2.0)
+    times = [t for _, t in calls]
+    assert _near(times[0], 0.5), "first move must be the immediate tap"
+    assert all(dx == -1 for dx, _ in calls)
+    # DAS gap: nothing between the tap and the DAS delay elapsing.
+    assert not any(0.54 < t <= 0.66 for t in times)
+    # Streaming exists and runs at the ARR cadence (>= ~40ms apart).
+    assert len(times) >= 3
+    for a, b in pairwise(times[1:]):
+        assert b - a >= 0.038
+    # Bounded tail: at most one extra step after the hold window expires.
+    assert times[-1] <= 0.82
+
+
+def test_das_direction_change_moves_immediately(monkeypatch) -> None:
+    """Switching direction mid-hold is a fresh press: it moves at once and
+    resets the DAS clock (no waiting for the old direction's DAS)."""
+    monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_das.json")
+    calls = _counting_moves(monkeypatch)
+    events = [
+        (0.5, curses.KEY_LEFT),
+        (0.535, curses.KEY_LEFT),  # during DAS: suppressed
+        (0.6, curses.KEY_RIGHT),   # fresh press: immediate move
+    ]
+    run_game(events=events, duration=2.0)
+    right_moves = [t for dx, t in calls if dx == 1]
+    assert len(right_moves) == 1 and _near(right_moves[0], 0.6)
+
+
+def test_das_hold_drives_piece_to_left_wall(monkeypatch) -> None:
+    """Sanity: holding left for ~0.5s (streaming) pushes the piece fully
+    against the left wall — far more than a terminal's ~4 auto-repeat
+    events in that window would achieve."""
+    monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_das.json")
+    seen = []
+
+    class WatchTetris(main.Tetris):
+        def __init__(self, start_level: int = 1) -> None:
+            super().__init__(start_level=start_level)
+            seen.append(self)
+
+    monkeypatch.setattr(main, "Tetris", WatchTetris)
+    events = [(0.5 + i * 0.035, curses.KEY_LEFT) for i in range(15)]  # 0.5..0.98
+    run_game(events=events, duration=2.0)
+    assert seen[-1].piece.x == 0
