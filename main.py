@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import curses
+import random
 import time
 
 from game import (
@@ -74,15 +75,15 @@ def cell_attr(kind: str) -> int:
     return curses.color_pair(COLORS[kind]) if curses.has_colors() else 0
 
 
-def draw_box(stdscr: curses.window, title: str, bx: int, by: int, w: int) -> None:
+def draw_box(stdscr: curses.window, title: str, bx: int, by: int, w: int, h: int = 6) -> tuple[int, int]:
     """Draw a titled box; returns (inner_x, inner_y)."""
     border = f"┌{'─' * (w - 2)}┐"
     try:
         stdscr.addstr(by, bx, border, curses.A_DIM)
         stdscr.addstr(by + 1, bx, f"│ {title:<{w - 4}} │", curses.A_DIM)
-        for i in range(3):
+        for i in range(h - 3):
             stdscr.addstr(by + 2 + i, bx, f"│{' ' * (w - 2)}│", curses.A_DIM)
-        stdscr.addstr(by + 5, bx, f"└{'─' * (w - 2)}┘", curses.A_DIM)
+        stdscr.addstr(by + h - 1, bx, f"└{'─' * (w - 2)}┘", curses.A_DIM)
     except curses.error:
         pass
     return bx + 2, by + 2
@@ -143,7 +144,7 @@ def draw_board(stdscr: curses.window, t: Tetris, bx: int, by: int) -> None:
             elif kind:
                 line_parts.append(("██", curses.color_pair(10) if y in flash_rows and curses.has_colors() else cell_attr(kind)))
             elif (x, y) in ghost_cells:
-                line_parts.append(("▒▒", curses.A_DIM))
+                line_parts.append(("▒▒", cell_attr(t.piece.kind) | curses.A_DIM))
             else:
                 line_parts.append(("  ", None))
 
@@ -167,11 +168,12 @@ def draw_board(stdscr: curses.window, t: Tetris, bx: int, by: int) -> None:
 
 
 def draw_sidebar(stdscr: curses.window, t: Tetris, hs: HighScores, by: int, sx: int, new_best: bool) -> None:
-    hold_x, hold_y = draw_box(stdscr, "HOLD", sx, by, 14)
+    hold_x, hold_y = draw_box(stdscr, "HOLD", sx, by, 14, 6)
     draw_piece_preview(stdscr, t.holding or "", hold_x, hold_y, dim=not t.can_hold)
 
-    next_x, next_y = draw_box(stdscr, "NEXT", sx, by + 7, 14)
+    next_x, next_y = draw_box(stdscr, "NEXT", sx, by + 7, 14, 8)
     draw_piece_preview(stdscr, t.next_kind, next_x, next_y)
+    draw_piece_preview(stdscr, t.next_kind2, next_x, next_y + 3, dim=True)
 
     stats = [
         ("SCORE", f"{t.score:,}"),
@@ -180,6 +182,7 @@ def draw_sidebar(stdscr: curses.window, t: Tetris, hs: HighScores, by: int, sx: 
         ("LEVEL", str(t.level)),
         ("COMBO", str(t.combo) if t.combo > 0 else "—"),
         ("B2B", "✓" if t.b2b else "—"),
+        ("SPINS", str(t.spins)),
     ]
     for i, (label, value) in enumerate(stats):
         try:
@@ -201,7 +204,7 @@ def draw_sidebar(stdscr: curses.window, t: Tetris, hs: HighScores, by: int, sx: 
 
     if new_best:
         try:
-            stdscr.addstr(by + 32, sx, "★ NEW BEST ★", curses.A_REVERSE)
+            stdscr.addstr(by + 32, sx, "★ NEW BEST ★", curses.A_REVERSE | curses.A_BLINK)
         except curses.error:
             pass
 
@@ -254,18 +257,25 @@ def game_loop(stdscr: curses.window) -> None:
     # Input timing state
     last_step = 0.0
     last_rotate = 0.0
-    last_grav = 0.0
     esc_seq: list[int] = []  # partial arrow-key sequence being reassembled
     esc_t = 0.0
 
+    # Effect state: floating score text (text, row, born), board shake,
+    # T-spin corner flash ((cx, cy), started).
+    floaters: list[tuple[str, int, float]] = []
+    shake_until = 0.0
+    spin_flash: tuple[tuple[int, int], float] | None = None
+
     def reset_game() -> None:
-        nonlocal t, new_best, rank, start_time, last_step, last_grav
+        nonlocal t, new_best, rank, start_time, last_step, shake_until, spin_flash
         t = Tetris()
         new_best = False
         rank = None
         start_time = time.monotonic()
         last_step = 0.0
-        last_grav = 0.0
+        floaters.clear()
+        shake_until = 0.0
+        spin_flash = None
 
     while True:
         now = time.monotonic()
@@ -304,38 +314,43 @@ def game_loop(stdscr: curses.window) -> None:
                 # One move per event, throttled — the terminal's auto-repeat
                 # provides the repeat while the key is held.
                 if now - last_step >= STEP_THROTTLE:
-                    t.move(d)
+                    t.move(d, now)
                     last_step = now
             elif key == curses.KEY_UP:
                 if now - last_rotate >= ROTATE_COOLDOWN:
-                    t.rotate(1)
+                    t.rotate(1, now)
                     last_rotate = now
             elif key in (ord("z"), ord("Z")):
                 if now - last_rotate >= ROTATE_COOLDOWN:
-                    t.rotate(-1)
+                    t.rotate(-1, now)
                     last_rotate = now
             elif key == curses.KEY_DOWN:
                 t.soft_drop()
             elif key == ord(" "):
-                t.hard_drop()
+                if t.hard_drop() > 0:
+                    shake_until = now + 0.12
             elif key in (ord("c"), ord("C")):
                 t.hold()
 
-        # ---- gravity --------------------------------------------------
-        if not t.paused and not t.game_over and not t.frozen:
-            if now - last_grav >= t.drop_interval:
-                t.tick()
-                last_grav = now
+        # ---- gravity + lock delay ------------------------------------
+        t.tick(now)
 
         # ---- flash animation ------------------------------------------
         if t.frozen:
-            clear_count = len(t.pending_clears)
-            finished = t.advance_flash()
-            if finished and clear_count >= 4:
+            t.advance_flash()
+
+        # ---- effects: floating text, spin flash, beeps ----------------
+        for ev in t.events:
+            floaters.append((ev.text, ev.row, now))
+            if ev.kind in ("tspin", "tspin-mini") and ev.center is not None:
+                spin_flash = (ev.center, now)
+            for _ in range({"clear": 1, "tetris": 2, "tspin": 3, "tspin-mini": 2}[ev.kind]):
                 try:
-                    curses.beep()  # little fanfare for a Tetris
+                    curses.beep()
                 except curses.error:
                     pass
+        t.events.clear()
+        floaters[:] = [f for f in floaters if now - f[2] < 1.2]
 
         # ---- game over ---------------------------------------------------
         if t.game_over and not new_best and rank is None and t.score > 0:
@@ -347,7 +362,7 @@ def game_loop(stdscr: curses.window) -> None:
         max_y, max_x = stdscr.getmaxyx()
         sidebar_x_offset = BOARD_W_DRAWN + 4
         total_w = sidebar_x_offset + 16
-        need_h = BOARD_H + 8  # board block + sidebar controls must fit
+        need_h = BOARD_H + 9  # board block + sidebar (incl. controls) must fit
         if max_x < total_w or max_y < need_h:
             stdscr.erase()
             try:
@@ -362,7 +377,41 @@ def game_loop(stdscr: curses.window) -> None:
         by = max(1, (max_y - (BOARD_H + 7)) // 2)
 
         stdscr.erase()
-        draw_board(stdscr, t, bx, by)
+
+        # Board shake: a 1-cell jitter for a couple of frames after a hard
+        # drop or a big clear.
+        ox = oy = 0
+        if now < shake_until:
+            ox, oy = random.choice((-1, 0, 1)), random.choice((-1, 0, 1))
+
+        draw_board(stdscr, t, bx + ox, by + oy)
+
+        # Floating score text, drifting up out of the board.
+        for text, row, born in floaters:
+            fy = by + oy + row - int((now - born) * 2.5)
+            fx = bx + ox + CELL_OFF + max(0, (BOARD_INNER_W - len(text)) // 2)
+            try:
+                stdscr.addstr(fy, fx, text, curses.A_REVERSE)
+            except curses.error:
+                pass
+
+        # T-spin corner flash: the four diagonals of the T's center.
+        if spin_flash is not None:
+            (cx, cy), st = spin_flash
+            if now - st >= 0.6:
+                spin_flash = None
+            else:
+                for dx, dy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+                    px, py = cx + dx, cy + dy
+                    if not (0 <= px < BOARD_W and 0 <= py < BOARD_H):
+                        continue
+                    try:
+                        stdscr.addstr(
+                            by + oy + py, bx + ox + CELL_OFF + px * BOARD_PITCH, "▓▓", curses.A_REVERSE
+                        )
+                    except curses.error:
+                        pass
+
         draw_sidebar(stdscr, t, hs, by, bx + sidebar_x_offset, new_best)
         if t.game_over:
             draw_game_over(stdscr, t, hs, time.monotonic() - start_time, rank, bx, by)

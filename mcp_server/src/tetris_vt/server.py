@@ -289,8 +289,10 @@ def tetris_stats() -> str:
     sess = require_session()
     text = "\n".join(sess.text_lines())
     result = []
-    for label in ("SCORE", "BEST", "LINES", "LEVEL", "COMBO", "B2B"):
-        m = re.search(rf"^\s*{label}\s+(\S+)", text, re.M)
+    for label in ("SCORE", "BEST", "LINES", "LEVEL", "COMBO", "B2B", "SPINS"):
+        # The label sits mid-line, after the board wall — match on word
+        # boundary rather than line start.
+        m = re.search(rf"\b{label}\s+(\S+)", text)
         if m:
             result.append(f"{label}={m.group(1)}")
     if " PAUSED " in text:

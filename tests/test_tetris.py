@@ -9,6 +9,8 @@ import game
 from game import (
     BOARD_H,
     BOARD_W,
+    FLASH_FRAMES,
+    LOCK_RESET_MAX,
     PIECES,
     HighScores,
     Tetris,
@@ -174,15 +176,14 @@ class TestDropping:
         assert t.soft_drop()
         assert t.score == before + 1
 
-    def test_soft_drop_locks_on_floor(self) -> None:
+    def test_soft_drop_grounds_without_locking(self) -> None:
+        """Modern rule: soft-dropping onto the floor does not lock the
+        piece; the lock delay decides (see TestLockDelay)."""
         t = Tetris()
-        piece = t.piece
         for _ in range(BOARD_H + 5):
             t.soft_drop()
-            if t.piece is not piece and any(k != "" for row in t.board for k in row):
-                break
-        locked = [(x, y) for y, row in enumerate(t.board) for x, k in enumerate(row) if k == piece.kind]
-        assert max(y for _, y in locked) == BOARD_H - 1
+        assert t.pieces == 0  # nothing locked yet
+        assert not any(k != "" for row in t.board for k in row)
 
     def test_gravity_does_not_award_points(self) -> None:
         # Regression: tick() used to route through soft_drop() and score
@@ -190,8 +191,8 @@ class TestDropping:
         t = Tetris()
         t.drop_interval = 0.001
         before = t.score
-        for _ in range(10):
-            t.tick()
+        for i in range(10):
+            t.tick(float(i))
         assert t.score == before
 
     def test_soft_drop_still_scores_after_gravity_fix(self) -> None:
@@ -364,7 +365,7 @@ class TestLineClearing:
         fill_row(t, BOARD_H - 1)
         t.pending_clears = [BOARD_H - 1]
         y0 = t.piece.y
-        t.tick()
+        t.tick(1.0)
         assert t.piece.y == y0
 
 
@@ -559,3 +560,164 @@ class TestHighScores:
         monkeypatch.setenv("TETRIS_SCORES", str(tmp_path / "alt.json"))
         path = game.default_scores_path()
         assert path == tmp_path / "alt.json"
+
+
+# ---------------------------------------------------------------------------
+# Lock delay
+# ---------------------------------------------------------------------------
+
+
+class TestLockDelay:
+    @staticmethod
+    def _grounded() -> tuple[Tetris, "game.Piece"]:
+        t = Tetris()
+        t.piece = game.Piece("O", 4, BOARD_H - 2)  # resting on the floor
+        t.tick(1.0)  # registers as grounded at t=1.0
+        return t, t.piece
+
+    def test_piece_locks_after_delay(self) -> None:
+        t, _ = self._grounded()
+        t.tick(1.4)
+        assert t.pieces == 0
+        t.tick(1.6)
+        assert t.pieces == 1
+        assert t.board[BOARD_H - 1][4] == "O"
+
+    def test_soft_drop_does_not_lock_when_grounded(self) -> None:
+        t, _ = self._grounded()
+        assert not t.soft_drop()
+        assert t.pieces == 0
+
+    def test_move_refreshes_lock_timer(self) -> None:
+        t, _ = self._grounded()
+        assert t.move(1, 1.4)
+        t.tick(1.85)  # < 0.5 s since the refresh at 1.4
+        assert t.pieces == 0
+        t.tick(2.0)
+        assert t.pieces == 1
+
+    def test_rotate_refreshes_lock_timer(self) -> None:
+        t, _ = self._grounded()
+        assert t.rotate(1, 1.4)
+        t.tick(1.85)
+        assert t.pieces == 0
+        t.tick(2.0)
+        assert t.pieces == 1
+
+    def test_resets_are_capped(self) -> None:
+        t, _ = self._grounded()
+        for i in range(LOCK_RESET_MAX):
+            assert t.move(1 if i % 2 == 0 else -1, 1.0 + i * 0.1)
+        # Last refresh was at 2.4; this move is beyond the cap and must not
+        # extend the timer any further.
+        assert t.move(1, 5.0)
+        t.tick(2.8)  # 2.8 - 2.4 = 0.4 < LOCK_DELAY
+        assert t.pieces == 0
+        t.tick(3.0)
+        assert t.pieces == 1
+
+
+# ---------------------------------------------------------------------------
+# T-spin
+# ---------------------------------------------------------------------------
+
+
+def _tspin_setup(t: Tetris, top_left: bool, top_right: bool, complete: bool) -> None:
+    """Board for a T (rot 0) locking at (3, 17): nub (4, 17) and the three
+    cells below (3..5 @ y=18) stay empty, row 19 blocks the floor under
+    them. Diagonal corner fills go in row 17; row 18 fills around the T so
+    it completes when the T lands (unless complete=False)."""
+    t.board = [[""] * BOARD_W for _ in range(BOARD_H)]
+    r17, r18, r19 = t.board[17], t.board[18], t.board[19]
+    r17[3] = "J" if top_left else ""
+    r17[5] = "J" if top_right else ""
+    for x in range(BOARD_W):
+        if x in (3, 4, 5) or (x == 0 and not complete):
+            continue
+        r18[x] = "J"
+    for x in (3, 4, 5):
+        r19[x] = "J"
+    t.piece = game.Piece("T", 3, 17)
+
+
+class TestTSpin:
+    def _play(self, t: Tetris) -> None:
+        t.hard_drop()
+        for _ in range(FLASH_FRAMES + 1):
+            t.advance_flash()
+
+    def test_full_single(self) -> None:
+        t = Tetris()
+        _tspin_setup(t, top_left=True, top_right=True, complete=True)
+        self._play(t)
+        assert t.score == 800
+        assert t.spins == 1
+        assert t.events[-1].kind == "tspin"
+        assert "+800" in t.events[-1].text
+
+    def test_mini_single(self) -> None:
+        t = Tetris()
+        _tspin_setup(t, top_left=False, top_right=True, complete=True)
+        self._play(t)
+        assert t.score == 200
+        assert t.spins == 0
+        assert t.events[-1].kind == "tspin-mini"
+
+    def test_no_spin_is_plain_single(self) -> None:
+        t = Tetris()
+        _tspin_setup(t, top_left=False, top_right=False, complete=True)
+        self._play(t)
+        assert t.score == 100
+        assert t.events[-1].kind == "clear"
+
+    def test_full_no_line(self) -> None:
+        t = Tetris()
+        _tspin_setup(t, top_left=True, top_right=True, complete=False)
+        t.hard_drop()
+        assert not t.pending_clears  # no flash — scored on lock
+        assert t.score == 400
+        assert t.spins == 1
+        assert t.events[-1].kind == "tspin"
+
+    def test_double_counts_as_b2b(self) -> None:
+        t = Tetris()
+        t.board = [[""] * BOARD_W for _ in range(BOARD_H)]
+        r16, r17, r18 = t.board[16], t.board[17], t.board[18]
+        r16[3] = r16[5] = "J"
+        for x in range(BOARD_W):
+            if x in (3, 4, 5):
+                continue
+            r17[x] = "J"
+        for x in range(BOARD_W):  # fully solid: blocks the T under its bottom row
+            r18[x] = "J"
+        t.piece = game.Piece("T", 3, 16)
+        self._play(t)
+        assert t.score == 1200
+        assert t.b2b
+
+    def test_non_t_piece_never_spins(self) -> None:
+        t = Tetris()
+        t.board = [[""] * BOARD_W for _ in range(BOARD_H)]
+        for x in (3, 4, 5):
+            t.board[19][x] = "J"
+        t.board[17][3] = t.board[17][5] = "J"
+        t.board[18][3] = t.board[18][5] = "J"
+        t.piece = game.Piece("O", 4, 18)
+        t.hard_drop()
+        assert t.spins == 0
+        assert all(ev.kind != "tspin" for ev in t.events)
+
+
+# ---------------------------------------------------------------------------
+# Next queue
+# ---------------------------------------------------------------------------
+
+
+class TestNextQueue:
+    def test_two_pieces_ahead(self) -> None:
+        t = Tetris()
+        a, b = t.next_kind, t.next_kind2
+        t.hard_drop()
+        assert t.next_kind == b
+        # All three came from the same 7-distinct bag.
+        assert t.next_kind2 not in (a, b)

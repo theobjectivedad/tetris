@@ -87,11 +87,15 @@ KICKS_I: dict[tuple[int, int], list[tuple[int, int]]] = {
 }
 
 SCORE_TABLE = {0: 0, 1: 100, 2: 300, 3: 500, 4: 800}
+TSPIN_SCORES = {1: (200, 800), 2: (1200, 1200), 3: (1600, 1600)}  # (mini, full)
+TSPIN_NO_LINE = (100, 400)  # (mini, full), no lines cleared
 COMBO_BONUS = 50        # per combo step, × level
-B2B_MULTIPLIER = 1.5    # back-to-back Tetris
+B2B_MULTIPLIER = 1.5    # back-to-back Tetris / T-spin multi
 SOFT_DROP_POINTS = 1    # per cell
 HARD_DROP_POINTS = 2    # per cell
 FLASH_FRAMES = 8        # frames a cleared row stays visible
+LOCK_DELAY = 0.5        # grace period after landing before the piece locks
+LOCK_RESET_MAX = 15     # move/rotate actions that can refresh the lock timer
 
 
 @dataclass
@@ -106,6 +110,16 @@ class Piece:
 
     def cells_at_rot(self, rot: int) -> list[tuple[int, int]]:
         return [(self.x + dx, self.y + dy) for dx, dy in PIECES[self.kind][rot]]
+
+
+@dataclass
+class Event:
+    """A UI effect the game requests: floating score text, corner flash, beeps."""
+
+    text: str
+    kind: str  # "clear" | "tetris" | "tspin" | "tspin-mini"
+    row: int = 10
+    center: tuple[int, int] | None = None  # T-spin center, for the corner flash
 
 
 class Tetris:
@@ -128,7 +142,15 @@ class Tetris:
         self.pending_clears: list[int] = []
         self.flash_frames = 0
         self.next_kind = self._refill()
+        self.next_kind2 = self._refill()
+        self.spins = 0
+        self.events: list[Event] = []
         self.piece = self._spawn()
+        self._grounded = False
+        self._lock_t = 0.0
+        self._resets = 0
+        self._last_grav: float | None = None
+        self._spin: bool | None = None  # T-spin of the last lock: True=full, False=mini
 
     # -- piece queue -------------------------------------------------
 
@@ -138,9 +160,16 @@ class Tetris:
             random.shuffle(self.bag)
         return self.bag.pop()
 
+    def _reset_fall_state(self) -> None:
+        self._grounded = False
+        self._resets = 0
+        self._last_grav = None
+
     def _spawn(self) -> Piece:
         kind = self.next_kind
-        self.next_kind = self._refill()
+        self.next_kind = self.next_kind2
+        self.next_kind2 = self._refill()
+        self._reset_fall_state()
         piece = Piece(kind=kind, x=BOARD_W // 2 - 2, y=0)
         if self._collides(piece):
             self.game_over = True
@@ -159,16 +188,25 @@ class Tetris:
 
     # -- player actions -----------------------------------------------
 
-    def move(self, dx: int) -> bool:
+    def _register_shift(self, now: float | None) -> None:
+        """A successful move/rotate while grounded refreshes the lock timer
+        (up to LOCK_RESET_MAX times — the guideline reset cap)."""
+        if now is None or not self._grounded or self._resets >= LOCK_RESET_MAX:
+            return
+        self._lock_t = now
+        self._resets += 1
+
+    def move(self, dx: int, now: float | None = None) -> bool:
         if self.game_over or self.frozen:
             return False
         p = Piece(self.piece.kind, self.piece.x + dx, self.piece.y, self.piece.rot)
         if not self._collides(p):
             self.piece = p
+            self._register_shift(now)
             return True
         return False
 
-    def rotate(self, d: int = 1) -> bool:
+    def rotate(self, d: int = 1, now: float | None = None) -> bool:
         """Rotate clockwise (d=1) or counter-clockwise (d=-1) with SRS kicks."""
         if self.game_over or self.frozen:
             return False
@@ -179,23 +217,21 @@ class Tetris:
             q = Piece(p.kind, p.x + dx, p.y - dy, new_rot)  # SRS y is up; ours is down
             if not self._collides(q, new_rot):
                 self.piece = q
+                self._register_shift(now)
                 return True
         return False
 
     def soft_drop(self) -> bool:
-        return self._move_down(award=True)
-
-    def _move_down(self, award: bool) -> bool:
+        """Player-initiated drop: 1 pt/cell. On the floor it does nothing —
+        the lock delay (see tick) decides when the piece locks."""
         if self.game_over or self.frozen:
             return False
         p = self.piece
         q = Piece(p.kind, p.x, p.y + 1, p.rot)
         if not self._collides(q):
             self.piece = q
-            if award:
-                self.score += SOFT_DROP_POINTS
+            self.score += SOFT_DROP_POINTS
             return True
-        self._lock()
         return False
 
     def hard_drop(self) -> int:
@@ -224,6 +260,7 @@ class Tetris:
             held = self.holding
             self.holding = kind
             self.piece = Piece(held, x=BOARD_W // 2 - 2, y=0)
+            self._reset_fall_state()
             if self._collides(self.piece):
                 self.game_over = True
         self.can_hold = False
@@ -235,11 +272,30 @@ class Tetris:
         """True while a line-clear flash animation is pending."""
         return bool(self.pending_clears)
 
-    def tick(self) -> None:
-        """Advance one gravity step (call when drop_interval has elapsed)."""
+    def _can_fall(self) -> bool:
+        p = self.piece
+        return not self._collides(Piece(p.kind, p.x, p.y + 1, p.rot), p.rot)
+
+    def tick(self, now: float) -> None:
+        """Advance the simulation at monotonic time ``now``: applies gravity
+        when it is due, and locks a grounded piece once it has rested for
+        LOCK_DELAY seconds (refreshed by move/rotate, capped)."""
         if self.game_over or self.paused or self.frozen:
             return
-        self._move_down(award=False)
+        if self._can_fall():
+            if self._grounded:
+                self._grounded = False
+                self._resets = 0
+            if self._last_grav is None or now - self._last_grav >= self.drop_interval:
+                self._last_grav = now
+                p = self.piece
+                self.piece = Piece(p.kind, p.x, p.y + 1, p.rot)
+        else:
+            if not self._grounded:
+                self._grounded = True
+                self._lock_t = now
+            elif now - self._lock_t >= LOCK_DELAY:
+                self._lock()
 
     def advance_flash(self) -> bool:
         """Advance flash animation one frame; returns True when it finishes
@@ -254,6 +310,36 @@ class Tetris:
 
     # -- locking / clearing -------------------------------------------
 
+    def _detect_spin(self) -> bool | None:
+        """T-spin corner rule: 3+ of the four diagonal corners around the
+        T's center must be occupied (out-of-bounds counts as occupied,
+        the ceiling does not). A 'full' spin also needs both front
+        corners — the side the nub points at."""
+        if self.piece.kind != "T":
+            return None
+        cx, cy = self.piece.x + 1, self.piece.y + 1
+
+        def filled(x: int, y: int) -> bool:
+            if y >= BOARD_H:
+                return True  # the floor counts as occupied
+            if y < 0:
+                return False  # the ceiling does not
+            if x < 0 or x >= BOARD_W:
+                return True
+            return bool(self.board[y][x])
+
+        # corners: 0=top-left, 1=top-right, 2=bottom-left, 3=bottom-right
+        corners = (
+            filled(cx - 1, cy - 1),
+            filled(cx + 1, cy - 1),
+            filled(cx - 1, cy + 1),
+            filled(cx + 1, cy + 1),
+        )
+        if sum(corners) < 3:
+            return None
+        front = {0: (0, 1), 1: (1, 3), 2: (2, 3), 3: (0, 2)}[self.piece.rot]
+        return bool(corners[front[0]] and corners[front[1]])
+
     def _lock(self) -> None:
         for cx, cy in self.piece.cells():
             if cy < 0:
@@ -262,6 +348,7 @@ class Tetris:
             self.board[cy][cx] = self.piece.kind
         self.pieces += 1
         self.can_hold = True
+        self._spin = self._detect_spin()
 
         if self.game_over:
             self.piece = self._spawn()
@@ -278,27 +365,68 @@ class Tetris:
     def _on_lock_no_clears(self) -> None:
         # Breaking a combo resets it.
         self.combo = 0
+        if self._spin is not None:
+            full = self._spin
+            pts = (TSPIN_NO_LINE[1] if full else TSPIN_NO_LINE[0]) * self.level
+            self.score += pts
+            if full:
+                self.spins += 1
+            cx, cy = self.piece.x + 1, self.piece.y + 1
+            self.events.append(
+                Event(
+                    text=f"{'T-SPIN' if full else 'T-SPIN MINI'} +{pts}",
+                    kind="tspin" if full else "tspin-mini",
+                    row=cy,
+                    center=(cx, cy),
+                )
+            )
+        self._spin = None
 
     def _commit_clears(self) -> None:
         count = len(self.pending_clears)
+        rows = self.pending_clears
         self.pending_clears = []
+        spin = self._spin
+        self._spin = None
 
-        points = SCORE_TABLE[count] * self.level
-        if count == 4:
+        if spin is not None:
+            pts = TSPIN_SCORES[count][1 if spin else 0] * self.level
+            label = "T-SPIN" if spin or count >= 2 else "T-SPIN MINI"
+            if spin:
+                self.spins += 1
+        else:
+            pts = SCORE_TABLE[count] * self.level
+            label = {1: "SINGLE", 2: "DOUBLE", 3: "TRIPLE", 4: "TETRIS"}[count]
+
+        # Back-to-back: Tetris or T-spin clearing 2+ lines.
+        qualifies = count == 4 or (spin is not None and count >= 2)
+        if qualifies:
             if self.b2b:
-                points = int(points * B2B_MULTIPLIER)
+                pts = int(pts * B2B_MULTIPLIER)
             self.b2b = True
         elif count > 0:
             self.b2b = False
 
         if self.combo > 0:
-            points += COMBO_BONUS * self.combo * self.level
+            pts += COMBO_BONUS * self.combo * self.level
         self.combo = count > 0 and self.combo + 1 or 0
 
-        self.score += points
+        self.score += pts
         self.lines += count
         self.level = self.lines // 10 + 1
         self.drop_interval = max(0.05, 0.5 * (0.8 ** (self.level - 1)))
+
+        self.events.append(
+            Event(
+                text=f"{label} +{pts}",
+                kind=(
+                    "tetris" if count == 4
+                    else ("tspin" if spin else "tspin-mini") if spin is not None
+                    else "clear"
+                ),
+                row=rows[-1],
+            )
+        )
 
         self.board = [row for row in self.board if not all(row)]
         while len(self.board) < BOARD_H:

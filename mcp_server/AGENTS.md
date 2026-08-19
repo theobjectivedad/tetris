@@ -75,6 +75,11 @@ observes and drives it.
   responses. Keep stdin open (`; sleep N`) when scripting manual probes.
 * **The game reads one key per 20 ms frame.** `tetris_key(interval=…)` must
   be ≥ 0.05 or repeats collide.
+* **Lock delay (0.5 s).** A piece resting on the floor does not lock
+  immediately — it waits `LOCK_DELAY` seconds, and each successful
+  move/rotate refreshes the timer (capped at 15 resets). When scripting
+  playtests, a grounded piece will sit for half a second after the last
+  key before locking; `tetris_key("space")` always locks instantly.
 * **Terminal escape sequences**: send real bytes (`\x1b[C`…); the game goes
   raw itself via curses, and pyte reproduces the exact grid from the cursor
   moves (board origin `bx=(W-42)//2, by=(H-27)//2`; the play field is 22
@@ -85,7 +90,9 @@ observes and drives it.
   on EOF and `waitpid` the child so no zombie is left behind.
 * **Keep UI markers in sync**: if the game UI changes (sidebar labels,
   ready marker), update `wait_for_ready`'s `READY_MARKER` and the
-  `tetris_stats` regexes.
+  `tetris_stats` regexes. Note the stats labels sit mid-line after the
+  board wall, so `tetris_stats` matches on `\bLABEL\s+` (word boundary),
+  not line start.
 
 ## Testing the server itself
 

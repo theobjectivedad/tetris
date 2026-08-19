@@ -8,6 +8,7 @@
         "/mnt/ai/theobjectivedad/pi/mcp_server",
         "tetris-vt-server"
       ],
+      "requestTimeoutMs": 120000,
       "env": {
         "TETRIS_GAME_DIR": "/mnt/ai/theobjectivedad/pi",
         "TETRIS_SCORES": "/tmp/tetris-mcp-scores.json"

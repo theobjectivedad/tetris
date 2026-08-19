@@ -92,7 +92,7 @@ The project root `.mcp.json` registers it:
 | `tetris_key`     | Send a key: `left right up down space c p q r z` (repeatable)      |
 | `tetris_wait`    | Wait real seconds; the game keeps running                          |
 | `tetris_screen`  | Screen (or a crop) as numbered text lines; `█` solid, `▒` ghost    |
-| `tetris_stats`   | Parse SCORE/BEST/LINES/LEVEL/COMBO/B2B; detect PAUSED / GAME OVER  |
+| `tetris_stats`   | Parse SCORE/BEST/LINES/LEVEL/COMBO/B2B/SPINS; detect PAUSED / GAME OVER  |
 | `tetris_state`   | Process running/exited, uptime, terminal size                      |
 | `tetris_stop`    | Stop the game (clean `q` or hard kill)                             |
 

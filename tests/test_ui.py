@@ -9,6 +9,7 @@ import curses
 import random
 
 import main
+from game import Piece
 from main import BOARD_H, BOARD_W
 
 
@@ -162,6 +163,31 @@ def test_no_movement_while_paused(monkeypatch) -> None:
     paused = run_game(events=[(0.3, ord("p")), (0.5, curses.KEY_RIGHT), (0.8, curses.KEY_RIGHT)])
     paused_cols = piece_cols(paused)
     assert paused_cols == base_cols
+
+
+def test_score_popup_renders_after_line_clear(monkeypatch) -> None:
+    """Rig a one-line clear (O fills the last two cells of the bottom
+    row), hard-drop it, and verify the floating score text appears on
+    screen once the flash animation commits the clear."""
+    monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_scores.json")
+
+    class RiggedTetris(main.Tetris):
+        def __init__(self) -> None:
+            super().__init__()
+            self.board[BOARD_H - 1] = ["J"] * 4 + ["", ""] + ["J"] * 5
+            self.piece = Piece("O", 4, 0)
+
+    monkeypatch.setattr(main, "Tetris", RiggedTetris)
+    scr = run_game(events=[(0.2, ord(" "))], duration=1.2)
+
+    rows: dict[int, dict[int, str]] = {}
+    for (y, x), ch in scr.grid.items():
+        rows.setdefault(y, {})[x] = ch
+    text = "\n".join(
+        "".join(cells.get(x, " ") for x in range(scr.cols))
+        for _, cells in sorted(rows.items())
+    )
+    assert "SINGLE" in text
 
 
 def test_split_esc_sequence_reassembles_into_arrow_key(monkeypatch) -> None:

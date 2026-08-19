@@ -31,10 +31,17 @@ Or directly: `uv run main.py`
 
 - **SRS rotation** with proper super-kicks (floor kicks, wall kicks)
 - **7-bag randomizer** — fair piece distribution
-- **Hold piece** (C), next-piece preview, ghost piece
-- **Line-clear flash animation**, terminal beep on Tetris
+- **Hold piece** (C), two-piece next queue, ghost piece (piece-colored)
+- **Lock delay** (0.5 s, refreshed by moves/rotations, 15-reset cap) for
+  modern, forgiving landing feel
+- **T-spins**: corner-rule detection with mini/full distinction, T-spin
+  scoring (100/200/400/800/1200/1600 × level), counted in the SPINS stat
+- **Line-clear flash animation**, floating score popups ("TETRIS +800",
+  "T-SPIN +1200", …), T-spin corner flash, board shake on hard drops,
+  terminal beeps (1 for clears, 2 for Tetris, 3 for T-spins)
 - **Modern scoring**: 100/300/500/800 × level, **combos** (+50 × combo × level),
-  **back-to-back Tetris** bonus (1.5×), soft/hard drop points
+  **back-to-back** bonus (1.5×) for Tetris and T-spin multi-line clears,
+  soft/hard drop points
 - **High scores** — top 5 persisted to `~/.local/share/terminal-tetris/scores.json`
   (override with `$TETRIS_SCORES`)
 - **Game-over stats** (score, lines, level, time, pieces, high-score rank)

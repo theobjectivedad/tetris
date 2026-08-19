@@ -8,3 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+
+# pi agent state
+.pi/
+pi-session-*.html
