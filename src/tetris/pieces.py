@@ -8,6 +8,7 @@ from __future__ import annotations
 
 BOARD_W = 10
 BOARD_H = 20
+MAX_START_LEVEL = 20  # upper bound for the player-selectable starting level
 
 # Piece definitions: list of rotation states (SRS), each a list of (x, y) offsets.
 PIECES: dict[str, list[list[tuple[int, int]]]] = {
@@ -79,4 +80,4 @@ KICKS_I: dict[tuple[int, int], list[tuple[int, int]]] = {
     (2, 1): [(0, 0), (-2, 0), (1, -1), (-2, 2), (1, 2)],
 }
 
-__all__ = ["BOARD_H", "BOARD_W", "KICKS_I", "KICKS_JLSTZ", "PIECES"]
+__all__ = ["BOARD_H", "BOARD_W", "KICKS_I", "KICKS_JLSTZ", "MAX_START_LEVEL", "PIECES"]

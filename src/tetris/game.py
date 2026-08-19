@@ -5,7 +5,9 @@ The implementation is split across focused modules:
 * :mod:`tetris.pieces`   — SRS piece/kick tables and board dimensions
 * :mod:`tetris.scoring`  — scoring constants
 * :mod:`tetris.engine`   — ``Piece``, ``Event`` and the pure ``Tetris`` engine
-* :mod:`tetris.scores`   — ``HighScores`` persistence (the only file-I/O module)
+* :mod:`tetris.settings` — pure player settings (start level, UI toggles)
+* :mod:`tetris.state`    — ``GameState``: the only file-I/O module (scores + settings)
+* :mod:`tetris.scores`   — legacy shim re-exporting ``HighScores`` from ``state``
 
 This module re-exports the public API so existing ``from tetris.game import
 ...`` imports (and the ``tetris import game`` module alias used by tests) keep
@@ -29,6 +31,8 @@ from .scoring import (
     ScoreBreakdown,
     Scorer,
 )
+from .settings import Settings
+from .state import GameState
 
 __all__ = [  # noqa: RUF022  # grouped by source module on purpose
     # pieces
@@ -58,4 +62,8 @@ __all__ = [  # noqa: RUF022  # grouped by source module on purpose
     # scores
     "HighScores",
     "default_scores_path",
+    # settings
+    "Settings",
+    # state
+    "GameState",
 ]

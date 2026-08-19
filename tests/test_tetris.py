@@ -16,6 +16,7 @@ from tetris.game import (
     HighScores,
     Tetris,
 )
+from tetris.pieces import MAX_START_LEVEL
 
 
 @pytest.fixture
@@ -486,6 +487,33 @@ class TestLeveling:
 
 
 # ---------------------------------------------------------------------------
+# Start level
+# ---------------------------------------------------------------------------
+
+
+class TestStartLevel:
+    def test_custom_start_level_sets_level_and_speed(self) -> None:
+        t = Tetris(start_level=5)
+        assert t.level == 5
+        assert t.drop_interval == max(0.05, 0.5 * (0.8 ** 4))
+
+    def test_start_level_clamped_low(self) -> None:
+        t = Tetris(start_level=0)
+        assert t.level == 1
+        assert t.drop_interval == 0.5
+
+    def test_start_level_clamped_high(self) -> None:
+        t = Tetris(start_level=99)
+        assert t.level == MAX_START_LEVEL
+        assert t.drop_interval == max(0.05, 0.5 * (0.8 ** (MAX_START_LEVEL - 1)))
+
+    def test_default_ctor_still_starts_at_level_one(self) -> None:
+        t = Tetris()
+        assert t.level == 1
+        assert t.drop_interval == max(0.05, 0.5 * (0.8 ** 0))
+
+
+# ---------------------------------------------------------------------------
 # Collision
 # ---------------------------------------------------------------------------
 
@@ -557,11 +585,11 @@ class TestHighScores:
         hs = HighScores(path)
         hs.record(420, 3, 1)
         raw = json.loads(path.read_text())
-        assert raw[0]["score"] == 420
+        assert raw["scores"][0]["score"] == 420  # unified {scores, settings} doc
 
         loaded = HighScores(path)
         assert loaded.best() == 420
-        assert loaded.entries == raw
+        assert loaded.entries == raw["scores"]
 
     def test_keeps_top_five(self, tmp_path) -> None:
         hs = HighScores(tmp_path / "scores.json")

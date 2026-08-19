@@ -11,7 +11,7 @@ import random
 from dataclasses import dataclass
 
 from .board import Board
-from .pieces import BOARD_H, BOARD_W, KICKS_I, KICKS_JLSTZ, PIECES
+from .pieces import BOARD_H, BOARD_W, KICKS_I, KICKS_JLSTZ, MAX_START_LEVEL, PIECES
 from .scoring import HARD_DROP_POINTS, SOFT_DROP_POINTS, Scorer
 
 FLASH_FRAMES = 8        # frames a cleared row stays visible
@@ -46,7 +46,11 @@ class Event:
 class Tetris:
     """Full game state. All mutation goes through the methods below."""
 
-    def __init__(self, rng: random.Random | None = None) -> None:
+    def __init__(
+        self,
+        rng: random.Random | None = None,
+        start_level: int = 1,
+    ) -> None:
         # An injectable RNG keeps the piece bag deterministic and isolated from
         # global state when provided. When omitted, we fall back to the module
         # level ``random`` (i.e. global ``random.seed`` still governs) so existing
@@ -56,13 +60,13 @@ class Tetris:
         self.board: Board = Board.empty()
         self.score = 0
         self.lines = 0
-        self.level = 1
+        self.level = max(1, min(MAX_START_LEVEL, start_level))
         self.pieces = 0
         self.combo = 0
         self.b2b = False
         self.game_over = False
         self.paused = False
-        self.drop_interval = 0.5
+        self.drop_interval = max(0.05, 0.5 * (0.8 ** (self.level - 1)))
         self.holding: str | None = None
         self.can_hold = True
         self.pending_clears: list[int] = []
