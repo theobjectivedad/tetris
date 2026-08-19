@@ -77,9 +77,11 @@ on any checkout (pi spawns the server with the project root as cwd, and
 ```
 
 * `--from .` is relative to the server process cwd (the project root).
-* `"!!pwd"` — pi-mcp-adapter executes env values with a leading `!` as a
-  shell command and uses its output; `pwd` yields the project root at start.
-  (Plain `${VAR}` env interpolation is also supported by the adapter.)
+* `"!pwd"` — pi-mcp-adapter executes env values with a **single** leading `!`
+  as a shell command and uses its trimmed output; `pwd` yields the project
+  root at start. A `!!` prefix is an *escape* (the value stays literal), so
+  `!!pwd` would set the string `!pwd`. Plain `${VAR}` interpolation is also
+  supported by the adapter.
 * `--no-cache` is **required for development** — uv caches local-path builds
   and will not rebuild after you edit `server.py` (`--refresh`/`--reinstall`
   don't invalidate it). Costs ~5 s of dependency re-downloads per start.

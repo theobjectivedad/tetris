@@ -18,6 +18,7 @@ import pty
 import re
 import signal
 import struct
+import subprocess
 import termios
 import threading
 import time
@@ -26,6 +27,7 @@ from pathlib import Path
 
 from mcp.server import MCPServer
 from pyte import Screen, Stream
+
 
 # Directory the game lives in (where `uv run python -m tetris.main` executes).
 # Same project as this server; auto-detection is a dev convenience.
@@ -45,7 +47,9 @@ GAME_DIR = _resolve_game_dir()
 GAME_CMD = os.environ.get("TETRIS_GAME_CMD", "uv run python -m tetris.main").split()
 READY_MARKER = "HOLD"
 
-mcp = MCPServer("tetris-vt", description="Play-test the terminal Tetris game in a virtual terminal")
+mcp = MCPServer(
+    "tetris-vt", description="Play-test the terminal Tetris game in a virtual terminal"
+)
 
 # key name -> byte sequence written to the pty
 KEYS: dict[str, bytes] = {
@@ -74,30 +78,40 @@ class GameSession:
         self.started = time.monotonic()
         self.alive = False
         self.exit_code: int | None = None
-        self.pid, self.fd = pty.fork()
-        if self.pid == 0:
-            # child: size the tty, drop env that would fight ncurses, exec the game
-            winsize = struct.pack("HHHH", height, width, 0, 0)
-            for dev in (0, 1, 2):
-                try:
-                    fcntl.ioctl(dev, termios.TIOCSWINSZ, winsize)
-                except OSError:
-                    pass
-            # Keep the line discipline raw from the start. Input written
-            # while the child is still booting (e.g. `uv run` resolving) is
-            # lost in canonical mode — with raw, early keystrokes queue up
-            # and the game reads them once it gets to getch().
-            try:
-                tty.setraw(0)
-            except OSError:
-                pass
-            for var in ("COLUMNS", "LINES"):
-                os.environ.pop(var, None)
-            # ncurses needs a real terminfo entry; MCP hosts may not set TERM
-            if os.environ.get("TERM", "").strip() in ("", "dumb"):
-                os.environ["TERM"] = "xterm-256color"
-            os.chdir(GAME_DIR)
-            os.execvp(GAME_CMD[0], GAME_CMD)
+        # Open the pty in the parent and spawn via Popen: the child does a
+        # pure C-level fork+exec with no Python code in between. (pty.fork()
+        # runs Python in the child and, in this multithreaded process — the
+        # MCP SDK runs reader threads — can deadlock on an inherited lock
+        # before the game even starts: live but silent game process.)
+        master, slave = pty.openpty()
+        winsize = struct.pack("HHHH", height, width, 0, 0)
+        fcntl.ioctl(master, termios.TIOCSWINSZ, winsize)
+        # Keep the line discipline raw from the start (the pty pair shares
+        # one line discipline, so this is set from the parent). Input
+        # written while the game is still booting (e.g. `uv run` resolving)
+        # is lost in canonical mode — with raw, early keystrokes queue up
+        # and the game reads them once it reaches getch().
+        tty.setraw(slave)
+        env = dict(os.environ)
+        for var in ("COLUMNS", "LINES"):
+            env.pop(var, None)
+        # ncurses needs a real terminfo entry; MCP hosts may not set TERM
+        if env.get("TERM", "").strip() in ("", "dumb"):
+            env["TERM"] = "xterm-256color"
+        try:
+            self.proc = subprocess.Popen(
+                GAME_CMD,
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+                cwd=GAME_DIR,
+                env=env,
+                start_new_session=True,
+            )
+        finally:
+            os.close(slave)
+        self.pid = self.proc.pid
+        self.fd = master
         self.alive = True
         self.thread = threading.Thread(target=self._read_loop, daemon=True)
         self.thread.start()
@@ -119,11 +133,9 @@ class GameSession:
                 with self.lock:
                     self.stream.feed(text)
         self.alive = False
-        try:
-            _, status = os.waitpid(self.pid, 0)
-            self.exit_code = os.waitstatus_to_exitcode(status)
-        except OSError:
-            pass
+        # Popen.wait() is double-wait-safe (caches the returncode), so this
+        # cannot race with stop() or Popen's own reaping.
+        self.exit_code = self.proc.wait()
         try:
             os.close(self.fd)
         except OSError:
@@ -147,10 +159,17 @@ class GameSession:
             while self.alive and time.monotonic() < deadline:
                 time.sleep(0.02)
         if self.alive:
+            # Kill the WHOLE process group: GAME_CMD is `uv run ...`, so
+            # killing just the direct child would orphan the game it spawned
+            # (which keeps the pty slave open — no EOF, no exit code, zombie
+            # game). start_new_session made the child the group leader.
             try:
-                os.kill(self.pid, signal.SIGKILL)
-            except OSError:
-                pass
+                os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                try:
+                    self.proc.kill()
+                except OSError:
+                    pass
             self.thread.join(timeout=2.0)
         return f"stopped (exit code {self.exit_code})"
 
@@ -167,6 +186,7 @@ def serialized(fn):
     def wrapper(*args, **kwargs):
         with _tool_lock:
             return fn(*args, **kwargs)
+
     return wrapper
 
 
@@ -179,7 +199,9 @@ def require_session() -> GameSession:
 def require_alive() -> GameSession:
     sess = require_session()
     if not sess.alive:
-        raise ValueError("game process already exited (code " + str(sess.exit_code) + ")")
+        raise ValueError(
+            "game process already exited (code " + str(sess.exit_code) + ")"
+        )
     return sess
 
 
@@ -187,14 +209,18 @@ def wait_for_ready(sess: GameSession, timeout: float = 10.0) -> str:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if not sess.alive:
-            return f"process exited before the board appeared (exit code {sess.exit_code})"
+            return (
+                f"process exited before the board appeared (exit code {sess.exit_code})"
+            )
         text = "\n".join(sess.text_lines())
         if READY_MARKER in text:
             return "ready"
         if "Terminal too small" in text:
             m = re.search(r"need (\d+)×(\d+)", text)
             need = m.group(0) if m else ""
-            return f"ERROR: terminal too small ({need}) — start with larger width/height"
+            return (
+                f"ERROR: terminal too small ({need}) — start with larger width/height"
+            )
         time.sleep(0.05)
     return "timeout waiting for the board (check the game output / tetris_screen)"
 
@@ -243,7 +269,9 @@ def tetris_key(key: str, count: int = 1, interval: float = 0.06) -> str:
         if len(key) == 1:
             data = key.encode()
         else:
-            return f"unknown key {key!r} — valid: {', '.join(KEYS)} or a single character"
+            return (
+                f"unknown key {key!r} — valid: {', '.join(KEYS)} or a single character"
+            )
     for i in range(max(1, count)):
         sess.send(data)
         if i < count - 1 and interval > 0:
@@ -264,7 +292,9 @@ def tetris_wait(seconds: float) -> str:
 
 @mcp.tool()
 @serialized
-def tetris_screen(y0: int = 0, y1: int | None = None, x0: int = 0, x1: int | None = None) -> str:
+def tetris_screen(
+    y0: int = 0, y1: int | None = None, x0: int = 0, x1: int | None = None
+) -> str:
     """Return the current screen (or a crop) as numbered text lines.
 
     Each line is 'NN|content|' where NN is the row number — use row/column

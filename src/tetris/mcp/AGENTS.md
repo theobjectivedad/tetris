@@ -15,9 +15,10 @@ observes and drives it.
 
 ## Architecture (src/tetris/mcp/server.py)
 
-- `GameSession` — `pty.fork()` + `os.execvp(GAME_CMD)`; child sets tty
-  winsize and `chdir(GAME_DIR)`. A daemon **reader thread** drains the pty
-  and feeds the pyte `Stream` under `session.lock`.
+- `GameSession` — `pty.openpty()` + `subprocess.Popen(GAME_CMD,
+  stdin=stdout=stderr=slave, cwd=GAME_DIR, start_new_session=True)`; the
+  parent sizes the pty and sets it raw *before* spawning. A daemon **reader
+  thread** drains the pty and feeds the pyte `Stream` under `session.lock`.
 - Tools are thin wrappers over the global `session`. Anything touching the
   pyte screen must hold `session.lock` (the reader thread writes to it).
 - The game is ready when the sidebar renders (`HOLD` on screen);
@@ -46,15 +47,23 @@ observes and drives it.
   by walking up from `server.py` looking for `src/tetris/main.py`; inside
   uvx's archive that walk lands in the archive dir, so the game fails with
   `uv: Failed to spawn: python — No such file or directory`. The checked-in
-  `.mcp.json` sets `TETRIS_GAME_DIR` to `"!!pwd"` (pi-mcp-adapter executes
-  `!`-prefixed env values as a command) so it resolves portably to the
-  project root; **any other MCP host must set `TETRIS_GAME_DIR` explicitly**.
-  The last-resort fallback is the server's cwd.
+  `.mcp.json` sets `TETRIS_GAME_DIR` to `"!pwd"` (pi-mcp-adapter executes a
+  **single** `!`-prefixed env value as a shell command; `!!` is a literal
+  escape) so it resolves portably to the project root; **any other MCP host
+  must set `TETRIS_GAME_DIR` explicitly**. The last-resort fallback is the
+  server's cwd.
+* **Never `pty.fork()`/`os.fork()` with Python code in the child here.** The
+  MCP SDK runs reader threads; a forked child can deadlock on an inherited
+  lock (futex wait, 1 context switch) before any post-fork Python runs.
+  Symptom: `tetris_state` says the game is "running" but `tetris_screen` is
+  blank forever and `wait_for_ready` times out. `GameSession` therefore
+  spawns via `subprocess.Popen` (C-level fork+exec only).
 * **Early keystrokes are lost in canonical mode.** Input written to the pty
   while the child is still booting (`uv run` resolving, ~1 s) sits in the
   canonical line buffer and is discarded when the app switches to raw.
-  The child therefore calls `tty.setraw(0)` *before* `execvp` so early keys
-  queue up and the game reads them once it reaches `getch()`.
+  `GameSession` therefore sets the pty raw *from the parent, before
+  spawning*, so early keys queue up and the game reads them once it reaches
+  `getch()`.
 * **Split arrow-key sequences.** With `nodelay()` on, curses `getch()` can
   return a bare ESC when a 3-byte `ESC [ C/D` sequence is split across
   reads; the stray `'C'` byte then leaks through as an ordinary key — in
@@ -66,9 +75,11 @@ observes and drives it.
   ncurses reports the pty winsize.
 * **pyte ≥ 0.8**: read text via the `screen.display` property (list of
   unicode strings); `screen.buffer[y][x].data` is an `int` now.
-* **Exit codes**: the reader thread reaps the child with
-  `os.waitstatus_to_exitcode(status)` — a SIGKILLed child must never report
-  exit 0.
+* **Exit codes**: the reader thread reaps the child with `Popen.wait()` —
+  a SIGKILLed child must never report exit 0. `stop(hard=True)` kills the
+  **whole process group** (`os.killpg`), because GAME_CMD is `uv run …` and
+  killing only the wrapper orphans the game (which keeps the pty slave open,
+  so the master never sees EOF and no exit code is ever reported).
 * **Parallel tool calls are serialized on the server.** MCP hosts (incl. pi)
   run tool calls from one message concurrently; all tools share the global
   `session`, so every tool is wrapped in `_tool_lock` (`@serialized`).

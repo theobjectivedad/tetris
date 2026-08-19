@@ -10,7 +10,7 @@
       ],
       "requestTimeoutMs": 120000,
       "env": {
-        "TETRIS_GAME_DIR": "!!pwd",
+        "TETRIS_GAME_DIR": "!pwd",
         "TETRIS_SCORES": "/tmp/tetris-mcp-scores.json"
       }
     }
