@@ -31,6 +31,18 @@ CELL_OFF = BOARD_WALL  # cell x=0 is drawn at bx + CELL_OFF
 STEP_THROTTLE = 0.04  # min interval between horizontal moves
 ROTATE_COOLDOWN = 0.12
 FRAME = 0.02          # main loop frame time (50 fps)
+ESC_TTL = 0.15        # how long a partial ESC sequence is kept while reassembling
+
+# Arrow keys arrive as ESC [ <A/B/C/D>. With nodelay() enabled, getch() can
+# hand back the bare ESC if the sequence is split across reads; the stray
+# '[' / 'C' bytes would then be processed as ordinary keys ('C' = hold!).
+# Reassemble them here so a split sequence still becomes one arrow key.
+ESC_SEQS = {
+    (27, 0x5B, ord("A")): curses.KEY_UP,
+    (27, 0x5B, ord("B")): curses.KEY_DOWN,
+    (27, 0x5B, ord("C")): curses.KEY_RIGHT,
+    (27, 0x5B, ord("D")): curses.KEY_LEFT,
+}
 
 
 def init_colors() -> None:
@@ -243,6 +255,8 @@ def game_loop(stdscr: curses.window) -> None:
     last_step = 0.0
     last_rotate = 0.0
     last_grav = 0.0
+    esc_seq: list[int] = []  # partial arrow-key sequence being reassembled
+    esc_t = 0.0
 
     def reset_game() -> None:
         nonlocal t, new_best, rank, start_time, last_step, last_grav
@@ -257,7 +271,27 @@ def game_loop(stdscr: curses.window) -> None:
         now = time.monotonic()
 
         # ---- input -------------------------------------------------
-        key = stdscr.getch()
+        raw = stdscr.getch()
+        key = -1
+        if raw != -1:
+            if esc_seq:
+                # Continue (or time out) a split ESC sequence.
+                if now - esc_t > ESC_TTL:
+                    esc_seq = []
+                if not esc_seq:
+                    if raw == 27:
+                        esc_seq = [27]
+                        esc_t = now
+                else:
+                    esc_seq.append(raw)
+                    if len(esc_seq) == 3:
+                        key = ESC_SEQS.get(tuple(esc_seq), -1)
+                        esc_seq = []
+            elif raw == 27:
+                esc_seq = [27]
+                esc_t = now
+            else:
+                key = raw
         if key in (ord("q"), ord("Q")):
             break
         if key in (ord("r"), ord("R")) and t.game_over:

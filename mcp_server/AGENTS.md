@@ -51,6 +51,12 @@ observes and drives it.
   canonical line buffer and is discarded when the app switches to raw.
   The child therefore calls `tty.setraw(0)` *before* `execvp` so early keys
   queue up and the game reads them once it reaches `getch()`.
+* **Split arrow-key sequences.** With `nodelay()` on, curses `getch()` can
+  return a bare ESC when a 3-byte `ESC [ C/D` sequence is split across
+  reads; the stray `'C'` byte then leaks through as an ordinary key — in
+  this game that silently triggers HOLD. `main.py` reassembles split
+  sequences (see `ESC_SEQS` / `esc_seq` in `game_loop`), so arrows work
+  whether the pty delivers them whole or in pieces.
 * **TERM**: the pty child inherits the server's TERM; it is forced to
   `xterm-256color` when unset/`dumb`, and `COLUMNS`/`LINES` are stripped so
   ncurses reports the pty winsize.

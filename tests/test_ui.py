@@ -162,3 +162,24 @@ def test_no_movement_while_paused(monkeypatch) -> None:
     paused = run_game(events=[(0.3, ord("p")), (0.5, curses.KEY_RIGHT), (0.8, curses.KEY_RIGHT)])
     paused_cols = piece_cols(paused)
     assert paused_cols == base_cols
+
+
+def test_split_esc_sequence_reassembles_into_arrow_key(monkeypatch) -> None:
+    """With nodelay() getch can return a bare ESC when the 3-byte arrow
+    sequence (ESC [ C) is split across reads; the stray 'C' byte must not
+    leak through as the HOLD key. A split RIGHT sequence must behave
+    exactly like one assembled KEY_RIGHT."""
+    monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_scores.json")
+
+    base = run_game(events=[])
+    base_cols = piece_cols(base)
+
+    # ESC, '[', 'C' delivered one frame apart (split across reads).
+    split = run_game(events=[(0.5, 27), (0.52, 0x5B), (0.54, ord("C"))])
+    assert piece_cols(split) == {c + 1 for c in base_cols}
+
+    # Same for LEFT (ESC [ D).
+    base2 = run_game(events=[])
+    base2_cols = piece_cols(base2)
+    split_left = run_game(events=[(0.5, 27), (0.52, 0x5B), (0.54, ord("D"))])
+    assert piece_cols(split_left) == {c - 1 for c in base2_cols}
