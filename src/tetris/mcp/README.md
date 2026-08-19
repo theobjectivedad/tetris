@@ -57,16 +57,18 @@ printf '%s\n%s\n' \
 
 ## Registering with pi (pi-mcp-adapter)
 
-The project root `.mcp.json` registers it:
+The project root `.mcp.json` registers it — no hardcoded paths, so it works
+on any checkout (pi spawns the server with the project root as cwd, and
+`.mcp.json` is only discovered from the project root anyway):
 
 ```json
 {
   "mcpServers": {
     "tetris": {
       "command": "uvx",
-      "args": ["--no-cache", "--from", "<abs path to the project root>", "tetris-vt-server"],
+      "args": ["--no-cache", "--from", ".", "tetris-vt-server"],
       "env": {
-        "TETRIS_GAME_DIR": "<abs path to the project root>",
+        "TETRIS_GAME_DIR": "!!pwd",
         "TETRIS_SCORES": "/tmp/tetris-mcp-scores.json"
       }
     }
@@ -74,6 +76,10 @@ The project root `.mcp.json` registers it:
 }
 ```
 
+* `--from .` is relative to the server process cwd (the project root).
+* `"!!pwd"` — pi-mcp-adapter executes env values with a leading `!` as a
+  shell command and uses its output; `pwd` yields the project root at start.
+  (Plain `${VAR}` env interpolation is also supported by the adapter.)
 * `--no-cache` is **required for development** — uv caches local-path builds
   and will not rebuild after you edit `server.py` (`--refresh`/`--reinstall`
   don't invalidate it). Costs ~5 s of dependency re-downloads per start.

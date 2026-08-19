@@ -45,9 +45,11 @@ observes and drives it.
 * **`__file__`-relative defaults break in a wheel.** `GAME_DIR` is resolved
   by walking up from `server.py` looking for `src/tetris/main.py`; inside
   uvx's archive that walk lands in the archive dir, so the game fails with
-  `uv: Failed to spawn: python — No such file or directory`. **Always set
-  `TETRIS_GAME_DIR`** in the MCP env. The last-resort fallback is the
-  server's cwd.
+  `uv: Failed to spawn: python — No such file or directory`. The checked-in
+  `.mcp.json` sets `TETRIS_GAME_DIR` to `"!!pwd"` (pi-mcp-adapter executes
+  `!`-prefixed env values as a command) so it resolves portably to the
+  project root; **any other MCP host must set `TETRIS_GAME_DIR` explicitly**.
+  The last-resort fallback is the server's cwd.
 * **Early keystrokes are lost in canonical mode.** Input written to the pty
   while the child is still booting (`uv run` resolving, ~1 s) sits in the
   canonical line buffer and is discarded when the app switches to raw.

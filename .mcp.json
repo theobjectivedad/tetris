@@ -5,12 +5,12 @@
       "args": [
         "--no-cache",
         "--from",
-        "/mnt/ai/theobjectivedad/pi",
+        ".",
         "tetris-vt-server"
       ],
       "requestTimeoutMs": 120000,
       "env": {
-        "TETRIS_GAME_DIR": "/mnt/ai/theobjectivedad/pi",
+        "TETRIS_GAME_DIR": "!!pwd",
         "TETRIS_SCORES": "/tmp/tetris-mcp-scores.json"
       }
     }
