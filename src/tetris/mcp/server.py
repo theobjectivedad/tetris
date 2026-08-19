@@ -10,6 +10,7 @@ or in the project venv:  uv run tetris-vt-server
 
 from __future__ import annotations
 
+import atexit
 import codecs
 import fcntl
 import functools
@@ -363,6 +364,15 @@ def tetris_stop(hard: bool = True) -> str:
 
 
 def main() -> None:
+    # If this process exits while a game is running (host reload, session
+    # end, stdin EOF), take the game with us — otherwise it is orphaned
+    # with a dead pty and keeps spinning.
+    def _cleanup() -> None:
+        global session
+        if session is not None and session.alive:
+            session.stop()
+
+    atexit.register(_cleanup)
     mcp.run()
 
 
