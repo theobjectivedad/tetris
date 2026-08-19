@@ -160,7 +160,7 @@ def build_help_modal() -> Modal:
         "↓ soft drop     SPACE hard drop",
         "C hold          P pause",
         "S settings      ? help",
-        "R replay (at game over)    Q quit",
+        "R restart (paused/over)    Q quit",
         "",
         "Q or ? closes this dialog",
         "",
@@ -182,6 +182,11 @@ def build_game_over_modal(t: Tetris, best: int, rank: int | None) -> Modal:
         lines.append(f"Best:   {best:,}")
     lines += ["", "R replay       Q quit"]
     return Modal("GAME OVER", lines)
+
+
+def build_pause_modal() -> Modal:
+    """The pause dialog: resume / restart / quit."""
+    return Modal("PAUSED", ["", "P resume     R restart     Q quit", ""])
 
 
 def build_settings_modal(settings: Settings, cursor: int) -> Modal:
@@ -500,7 +505,7 @@ def game_loop(stdscr: curses.window) -> None:
                 close_menu()  # in a modal, Q closes the dialog, never quits
             else:
                 break
-        elif key in (ord("r"), ord("R")) and t.game_over:
+        elif key in (ord("r"), ord("R")) and (t.game_over or t.paused):
             reset_game()
         elif key == ord("?") and not t.game_over:
             if menu == "help":
@@ -627,10 +632,7 @@ def game_loop(stdscr: curses.window) -> None:
         elif menu == "settings":
             draw_modal(stdscr, build_settings_modal(state.settings, menu_cursor), max_x, max_y)
         elif t.paused:
-            try:
-                stdscr.addstr(by + BOARD_H // 2, bx + (BOARD_W_DRAWN - 8) // 2, " PAUSED ", curses.A_REVERSE)
-            except curses.error:
-                pass
+            draw_modal(stdscr, build_pause_modal(), max_x, max_y)
         stdscr.refresh()
 
         time.sleep(FRAME)

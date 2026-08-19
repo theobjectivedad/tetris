@@ -87,10 +87,14 @@ def run_game(events: list[tuple[float, int]], duration: float = 2.0, seed: int =
         real_curses.has_colors,
         real_curses.beep,
     )
+    real_color_pair = real_curses.color_pair
     main.time = fake_time
     real_curses.curs_set = lambda *a, **k: None
     real_curses.has_colors = lambda: False
     real_curses.beep = lambda: None
+    # color_pair() needs initscr(); the stats sidebar calls it per line and
+    # the fake screen has no color initialization, so return a plain attr.
+    real_curses.color_pair = lambda *a, **k: 0
     try:
         main.game_loop(scr)
     finally:
@@ -98,6 +102,7 @@ def run_game(events: list[tuple[float, int]], duration: float = 2.0, seed: int =
         real_curses.curs_set = real_curs_set
         real_curses.has_colors = real_has_colors
         real_curses.beep = real_beep
+        real_curses.color_pair = real_color_pair
     return scr
 
 
@@ -459,3 +464,51 @@ def test_das_hold_drives_piece_to_left_wall(monkeypatch) -> None:
     events = [(0.5 + i * 0.035, curses.KEY_LEFT) for i in range(15)]  # 0.5..0.98
     run_game(events=events, duration=2.0)
     assert seen[-1].piece.x == 0
+
+
+# ---------------------------------------------------------------------------
+# Pause menu
+# ---------------------------------------------------------------------------
+
+
+def _frames_text(scr: FakeScreen, lo: int, hi: int) -> str:
+    return "\n".join(grid_to_text_for_frame(f, scr.cols) for f in scr.frames[lo:hi])
+
+
+def test_pause_shows_modal_with_options(monkeypatch) -> None:
+    """P opens a PAUSED modal offering resume / restart / quit."""
+    monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_pause.json")
+    scr = run_game(events=[(0.3, ord("p"))], duration=2.0)
+    text = _frames_text(scr, 20, 45)  # 0.4s-0.9s, while paused
+    assert "PAUSED" in text
+    assert "resume" in text and "restart" in text and "quit" in text
+
+
+def test_pause_toggles_closed(monkeypatch) -> None:
+    """A second P closes the pause modal and unpauses the game."""
+    monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_pause.json")
+    scr = run_game(events=[(0.3, ord("p")), (1.0, ord("p"))], duration=2.0)
+    assert "PAUSED" in _frames_text(scr, 20, 45)   # 0.4s-0.9s: paused
+    assert "PAUSED" not in _frames_text(scr, 55, 80)  # 1.1s-1.6s: resumed
+
+
+def test_pause_r_restarts(monkeypatch) -> None:
+    """R while paused starts a fresh game (score reset)."""
+    monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_pause.json")
+
+    created = []
+
+    class ScoredTetris(main.Tetris):
+        def __init__(self, start_level: int = 1) -> None:
+            super().__init__(start_level=start_level)
+            created.append(self)
+            if len(created) == 1:  # rig only the pre-restart game
+                self.score = 500
+
+    monkeypatch.setattr(main, "Tetris", ScoredTetris)
+    scr = run_game(events=[(0.3, ord("p")), (1.0, ord("r"))], duration=2.0)
+    early = _frames_text(scr, 20, 45)
+    late = _frames_text(scr, 55, 80)
+    assert "SCORE  500" in early
+    assert "PAUSED" not in late
+    assert "SCORE  0" in late and "SCORE  500" not in late
