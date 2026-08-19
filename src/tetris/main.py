@@ -56,6 +56,7 @@ HOLD_WINDOW = 0.06  # a dir-key event within this window counts as "still held"
 ROTATE_COOLDOWN = 0.12
 FRAME = 0.02          # main loop frame time (50 fps)
 ESC_TTL = 0.15        # how long a partial ESC sequence is kept while reassembling
+SPAWN_ANIM_SECONDS = 0.15  # how long the new piece glides in from the NEXT box
 
 # Arrow keys arrive as ESC [ <A/B/C/D>. With nodelay() enabled, getch() can
 # hand back the bare ESC if the sequence is split across reads; the stray
@@ -240,7 +241,14 @@ def draw_piece_preview(stdscr: curses.window, kind: str, ix: int, iy: int, dim: 
                     pass
 
 
-def draw_board(stdscr: curses.window, t: Tetris, bx: int, by: int, show_ghost: bool = True) -> None:
+def draw_board(
+    stdscr: curses.window,
+    t: Tetris,
+    bx: int,
+    by: int,
+    show_ghost: bool = True,
+    hide_live: bool = False,
+) -> None:
     # Solid border around the play area. The walls are outside the cell
     # area (1 col per side), so blocks never render on top of them.
     right = bx + BOARD_W_DRAWN - 1
@@ -261,7 +269,9 @@ def draw_board(stdscr: curses.window, t: Tetris, bx: int, by: int, show_ghost: b
             ghost_cells = {
                 (dx + t.piece.x, t.ghost_y() + dy) for dx, dy in PIECES[t.piece.kind][t.piece.rot]
             }
-        live_cells = {(x, y): t.piece.kind for x, y in t.piece.cells() if y >= 0}
+        # hide_live: the spawn glide draws the piece itself (see game_loop).
+        if not hide_live:
+            live_cells = {(x, y): t.piece.kind for x, y in t.piece.cells() if y >= 0}
 
     for y in range(BOARD_H):
         row = t.board[y]
@@ -294,6 +304,54 @@ def draw_board(stdscr: curses.window, t: Tetris, bx: int, by: int, show_ghost: b
                 stdscr.addstr(by + y + 1, bx, "█" * BOARD_W_DRAWN, curses.A_BLINK)
             except curses.error:
                 pass
+
+
+def _draw_spawn_glide(
+    stdscr: curses.window,
+    t: Tetris,
+    frac: float,
+    bx: int,
+    by: int,
+    ox: int,
+    oy: int,
+) -> None:
+    """Draw the newly spawned piece mid-glide from the NEXT box head to its
+    spawn position. ``frac`` runs 0 (at the NEXT head) to 1 (at the grid
+    position). The piece is drawn unclipped: it legitimately crosses the
+    board's right wall while flying in from the sidebar.
+
+    The "from" point uses the unshaken layout (the flight may ignore
+    shake); the "to" point is the piece's current grid top-left (shake
+    included), recomputed by the caller every frame so player input during
+    the glide lands correctly.
+    """
+    kind = t.piece.kind
+    live = [(x, y) for x, y in t.piece.cells() if y >= 0]
+    if not live:
+        return  # the whole piece is above the rim: nothing on the board yet
+    min_x = min(x for x, _ in live)
+    min_y = min(y for _, y in live)
+    to_x = bx + ox + CELL_OFF + min_x * BOARD_PITCH
+    to_y = by + oy + min_y + 1
+
+    # "from": the NEXT box's head preview (see draw_piece_preview /
+    # draw_sidebar): inner origin (bx + BOARD_W_DRAWN + 4 + 2, by + 9),
+    # preview centered in the 12-col inner area on its rotation-0 footprint.
+    base = PIECES[kind][0]
+    width_px = (max(x for x, _ in base) - min(x for x, _ in base) + 1) * BOARD_PITCH
+    next_x = bx + BOARD_W_DRAWN + 4 + 2
+    next_y = by + 9
+    from_x = next_x - 1 + (12 - width_px) // 2
+    from_y = next_y + min(y for _, y in base)
+
+    px = round(from_x + (to_x - from_x) * frac)
+    py = round(from_y + (to_y - from_y) * frac)
+    for x, y in live:
+        row, col = py + (y - min_y), px + (x - min_x) * BOARD_PITCH
+        try:
+            stdscr.addstr(row, col, "██", cell_attr(kind))
+        except curses.error:
+            pass
 
 
 def draw_sidebar(stdscr: curses.window, t: Tetris, state: GameState, by: int, sx: int, new_best: bool) -> None:
@@ -477,24 +535,32 @@ def game_loop(stdscr: curses.window) -> None:
     menu: str | None = None  # None | "help" | "settings"
     menu_cursor = 0
     was_paused = False
+    # Spawn animation: the new piece glides in from the NEXT box head.
+    # last_seq starts at 0 (not t.spawn_seq) so the very first piece
+    # glides too.
+    anim_start: float | None = None
+    last_seq = 0
 
     def reset_game() -> None:
-        nonlocal t, new_best, rank, menu, was_paused
+        nonlocal t, new_best, rank, menu, was_paused, anim_start, last_seq
         t = Tetris(start_level=state.settings.start_level)
         new_best = False
         rank = None
         menu = None
         was_paused = False
+        anim_start = None
+        last_seq = 0  # a fresh game's first piece glides in too
         # Restart/menu: also clear any in-flight held-key stream.
         reader.reset()
         effects.clear()
 
     def open_menu(kind: str) -> None:
         """Open a modal menu; the game is paused for its duration."""
-        nonlocal menu, was_paused
+        nonlocal menu, was_paused, anim_start
         was_paused = t.paused
         t.paused = True
         menu = kind
+        anim_start = None  # a menu open mid-flight cancels the glide
         reader.reset()  # no stale holds may survive a menu round-trip
 
     def close_menu() -> None:
@@ -579,6 +645,18 @@ def game_loop(stdscr: curses.window) -> None:
             if rank is not None:
                 new_best = True
 
+        # ---- spawn animation ---------------------------------------------
+        # A new piece has appeared (initial spawn, after a lock, a hold,
+        # or a committed line clear): glide it in from the NEXT box head.
+        if (
+            not t.game_over
+            and menu is None
+            and not t.paused
+            and t.spawn_seq != last_seq
+        ):
+            anim_start = now
+            last_seq = t.spawn_seq
+
         # ---- draw ----------------------------------------------------
         max_y, max_x = stdscr.getmaxyx()
         sidebar_x_offset = BOARD_W_DRAWN + 4
@@ -601,7 +679,22 @@ def game_loop(stdscr: curses.window) -> None:
         # drop or a big clear.
         ox, oy = effects.shake(now)
 
-        draw_board(stdscr, t, bx + ox, by + oy, show_ghost=state.settings.ghost)
+        # Spawn glide: while the new piece is still in flight the live piece
+        # is hidden and drawn by the glide (below) instead; once the
+        # duration has elapsed the piece simply appears at its grid
+        # position.
+        glide_frac: float | None = None
+        if anim_start is not None and not t.game_over:
+            elapsed = now - anim_start
+            if elapsed >= SPAWN_ANIM_SECONDS:
+                anim_start = None
+            else:
+                glide_frac = min(1.0, elapsed / SPAWN_ANIM_SECONDS)
+
+        draw_board(
+            stdscr, t, bx + ox, by + oy,
+            show_ghost=state.settings.ghost, hide_live=glide_frac is not None,
+        )
 
         # Floating score text, drifting up out of the board.
         for text, row, born in effects.floaters:
@@ -630,6 +723,11 @@ def game_loop(stdscr: curses.window) -> None:
                         pass
 
         draw_sidebar(stdscr, t, state, by, bx + sidebar_x_offset, new_best)
+
+        # Spawn glide: drawn last among the non-modal elements, so it can
+        # legitimately overlap the board's right wall while flying in.
+        if glide_frac is not None:
+            _draw_spawn_glide(stdscr, t, glide_frac, bx, by, ox, oy)
 
         # ---- modals: game over / help / settings ---------------------
         if t.game_over:

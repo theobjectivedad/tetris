@@ -75,6 +75,7 @@ class Tetris:
         self.queue: list[str] = [self._refill() for _ in range(QUEUE_LEN)]
         self.spins = 0
         self.events: list[Event] = []
+        self.spawn_seq: int = 0  # bumped by _spawn; lets the UI detect spawns
         self.piece = self._spawn()
         self._grounded = False
         self._lock_t = 0.0
@@ -108,6 +109,7 @@ class Tetris:
         self._last_grav = None
 
     def _spawn(self) -> Piece:
+        self.spawn_seq += 1
         kind = self.queue.pop(0)
         self.queue.append(self._refill())
         self._reset_fall_state()
