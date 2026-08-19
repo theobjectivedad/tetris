@@ -16,6 +16,10 @@ from game import (
 # Colors: pair index -> piece kind
 COLORS: dict[str, int] = {"I": 1, "O": 2, "T": 3, "S": 4, "Z": 5, "J": 6, "L": 7}
 
+# Drawn width of the play field: cells are 2 chars wide with a 1-col gap
+# (pitch 3), so 10 cells span BOARD_W*3-1 columns.
+BOARD_COLS = 29
+
 # Key handling tuning
 # Terminals deliver their own auto-repeat while a key is held, so we just
 # throttle consecutive moves. This also guards against a single tap producing
@@ -89,8 +93,17 @@ def draw_piece_preview(stdscr: curses.window, kind: str, ix: int, iy: int, dim: 
 
 
 def draw_board(stdscr: curses.window, t: Tetris, bx: int, by: int) -> None:
+    # Solid border around the play area, drawn at cell pitch so it lines up
+    # with the blocks (2-col segments + 1-col gaps). The side walls occupy
+    # the outermost cell slots (x=0 and x=9), so a piece flush against the
+    # edge visually merges with the wall.
+    right = bx + (BOARD_W - 1) * 3
     try:
-        stdscr.addstr(by, bx, "█" * (BOARD_W * 2 + 1), curses.A_DIM)
+        stdscr.addstr(by, bx, "█" * BOARD_COLS, curses.A_DIM)
+        stdscr.addstr(by + BOARD_H + 1, bx, "█" * BOARD_COLS, curses.A_DIM)
+        for y in range(1, BOARD_H + 1):
+            stdscr.addstr(by + y, bx, "██", curses.A_DIM)
+            stdscr.addstr(by + y, right, "██", curses.A_DIM)
     except curses.error:
         pass
 
@@ -131,7 +144,7 @@ def draw_board(stdscr: curses.window, t: Tetris, bx: int, by: int) -> None:
 
         if y in flash_rows:
             try:
-                stdscr.addstr(by + y + 1, bx, "█" * (BOARD_W * 2 + 1), curses.A_BLINK)
+                stdscr.addstr(by + y + 1, bx, "█" * BOARD_COLS, curses.A_BLINK)
             except curses.error:
                 pass
 
@@ -180,24 +193,24 @@ def draw_sidebar(stdscr: curses.window, t: Tetris, hs: HighScores, by: int, sx: 
 
 
 def draw_game_over(stdscr: curses.window, t: Tetris, hs: HighScores, elapsed: float, rank: int | None, bx: int, by: int) -> None:
-    board_w = BOARD_W * 2 + 1
+    interior_w = BOARD_COLS - 4  # inside the left/right walls
     lines = [
         "GAME OVER",
         "",
         f"Score:  {t.score:,}",
-        f"Lines:  {t.lines}    Level: {t.level}",
-        f"Time:   {int(elapsed // 60):02d}:{int(elapsed % 60):02d}    Pieces: {t.pieces}",
+        f"Lines {t.lines}   Level {t.level}",
+        f"Time {int(elapsed // 60):02d}:{int(elapsed % 60):02d}   Pcs {t.pieces}",
     ]
     if rank is not None:
         lines.append(f"★ New high score: #{rank + 1} ★")
     else:
         lines.append(f"Best:   {hs.best():,}")
-    lines += ["", "R — play again    Q — quit"]
+    lines += ["", "R replay      Q quit"]
 
     # darkening overlay behind the message (drawn first, text on top)
     for y in range(BOARD_H):
         try:
-            stdscr.addstr(by + y + 1, bx, " " * board_w)
+            stdscr.addstr(by + y + 1, bx + 2, " " * interior_w)
         except curses.error:
             pass
 
@@ -207,7 +220,7 @@ def draw_game_over(stdscr: curses.window, t: Tetris, hs: HighScores, elapsed: fl
             attr = curses.A_REVERSE if line == "GAME OVER" else (
                 curses.color_pair(9) if "★" in line else 0
             )
-            stdscr.addstr(start_y + i, bx + max(0, (board_w - len(line)) // 2), line, attr)
+            stdscr.addstr(start_y + i, bx + 2 + max(0, (interior_w - len(line)) // 2), line, attr)
         except curses.error:
             pass
 
@@ -296,13 +309,13 @@ def game_loop(stdscr: curses.window) -> None:
 
         # ---- draw ----------------------------------------------------
         max_y, max_x = stdscr.getmaxyx()
-        board_w = BOARD_W * 2 + 1
-        sidebar_x_offset = board_w + 4
+        sidebar_x_offset = BOARD_COLS + 4
         total_w = sidebar_x_offset + 16
-        if max_x < total_w + 4 or max_y < BOARD_H + 6:
+        need_h = BOARD_H + 3  # top border + 20 rows + bottom border, plus 1
+        if max_x < total_w or max_y < need_h:
             stdscr.erase()
             try:
-                stdscr.addstr(1, 1, f"Terminal too small — need {total_w + 4}×{BOARD_H + 6}, got {max_x}×{max_y}")
+                stdscr.addstr(1, 1, f"Terminal too small — need {total_w}×{need_h}, got {max_x}×{max_y}")
             except curses.error:
                 pass
             stdscr.refresh()
@@ -310,7 +323,7 @@ def game_loop(stdscr: curses.window) -> None:
             continue
 
         bx = max(0, (max_x - total_w) // 2)
-        by = max(1, (max_y - (BOARD_H + 5)) // 2)
+        by = max(1, (max_y - (BOARD_H + 7)) // 2)
 
         stdscr.erase()
         draw_board(stdscr, t, bx, by)

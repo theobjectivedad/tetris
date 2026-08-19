@@ -89,22 +89,27 @@ def run_game(events: list[tuple[float, int]], duration: float = 2.0, seed: int =
 
 
 def piece_cols(scr: FakeScreen) -> set[int]:
-    """Board columns of the live piece (topmost █ cells below the border)."""
-    border_row = 2  # board top border; interior starts at 3
-    block_cols = set()
+    """Board columns of the live piece (topmost █ cells in the board interior).
+
+    Layout math must match main.game_loop: total width 49 (board 29 + gap 4
+    + sidebar 16), board block 22 rows tall; the solid border walls occupy
+    the outer 2 columns of each interior row, so they are excluded.
+    """
+    by = max(1, (scr.rows - 27) // 2)
+    bx = (scr.cols - 49) // 2
     top_row = None
     for (y, x), ch in scr.grid.items():
-        if ch == "█" and y > border_row:
+        if ch == "█" and by + 1 <= y <= by + 20 and bx + 2 <= x <= bx + 26:
             if top_row is None or y < top_row:
                 top_row = y
     if top_row is None:
         return set()
-    for (y, x), ch in scr.grid.items():
-        if ch == "█" and y == top_row:
-            block_cols.add(x)
     # Cells are 2 chars wide with pitch 3; bx is the board origin.
-    bx = (scr.cols - 41) // 2
-    return {(x - bx) // 3 for x in block_cols}
+    return {
+        (x - bx) // 3
+        for (y, x), ch in scr.grid.items()
+        if ch == "█" and y == top_row and bx + 2 <= x <= bx + 26
+    }
 
 
 def test_single_tap_moves_exactly_one_cell(monkeypatch) -> None:
