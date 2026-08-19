@@ -23,3 +23,7 @@ lint:
 # Format the code
 fmt:
   uv run --with ruff ruff format .
+
+# Run the Tetris MCP play-test server (stdio; used by the agent)
+mcp:
+  cd mcp_server && uv run tetris-vt-server

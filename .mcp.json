@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "tetris": {
+      "command": "uvx",
+      "args": [
+        "--no-cache",
+        "--from",
+        "/mnt/ai/theobjectivedad/pi/mcp_server",
+        "tetris-vt-server"
+      ],
+      "env": {
+        "TETRIS_GAME_DIR": "/mnt/ai/theobjectivedad/pi",
+        "TETRIS_SCORES": "/tmp/tetris-mcp-scores.json"
+      }
+    }
+  }
+}
