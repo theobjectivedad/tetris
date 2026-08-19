@@ -13,6 +13,7 @@ build:
 release version:
   #!/usr/bin/env bash
   set -euo pipefail
+  version='{{version}}'               # just interpolates the recipe argument (no positional args for shebang recipes)
   ver="${version#v}"                 # strip an optional leading v
   tag="v${ver}"                      # hatch-vcs maps v1.2.0 -> 1.2.0
 
