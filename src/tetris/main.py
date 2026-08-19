@@ -27,11 +27,13 @@ from .stats import sidebar_stats
 # Colors: pair index -> piece kind
 COLORS: dict[str, int] = {"I": 1, "O": 2, "T": 3, "S": 4, "Z": 5, "J": 6, "L": 7}
 
-# Frame rendering: a solid white bar/line (black glyph on white background,
-# pair 11) so the border is a categorical visual distinct from every piece
-# color. A_REVERSE with no color pair is dropped by some terminals, so it
-# only remains the no-color fallback; init_colors() upgrades BORDER_ATTR.
-BORDER_ATTR = curses.A_REVERSE
+# Frame rendering: a solid bar in a gray no piece color uses (extended
+# color 231), so the border can never read as a block. init_colors()
+# upgrades BORDER_ATTR (bold white on 8-color terminals, where no
+# distinct 8th color exists; the basic 7 are all taken by pieces).
+# A_DIM remains the no-color fallback.
+BORDER_ATTR = curses.A_DIM
+BORDER_PAIR = 11
 
 # Drawn geometry: each cell renders as a solid 2-column block — about
 # square on a terminal's ~2:1 char aspect — and cells are contiguous with
@@ -72,6 +74,7 @@ ESC_SEQS = {
 
 
 def init_colors() -> None:
+    global BORDER_ATTR
     if not curses.has_colors():
         return
     curses.start_color()
@@ -86,17 +89,23 @@ def init_colors() -> None:
         8: curses.COLOR_WHITE,   # text
         9: curses.COLOR_YELLOW,  # highlights
         10: curses.COLOR_BLACK,  # flash (with white bg)
-        11: curses.COLOR_BLACK,  # border (solid white bar)
     }
     for i, fg in pairs.items():
         if i == 10:
             curses.init_pair(i, curses.COLOR_WHITE, curses.COLOR_YELLOW)
-        elif i == 11:
-            curses.init_pair(i, curses.COLOR_BLACK, curses.COLOR_WHITE)
         else:
             curses.init_pair(i, fg, curses.COLOR_BLACK)
-    global BORDER_ATTR
-    BORDER_ATTR = curses.color_pair(11)
+    # Border: a gray none of the pieces use (extended color) when the
+    # terminal supports it; bold white is the closest distinct look on
+    # 8-color terminals. NOTE: never use A_REVERSE here — with a
+    # white-fg/black-bg default it swaps to a black bar (invisible).
+    color_count = getattr(curses, "color_count", lambda: 8)
+    if color_count() >= 256:
+        curses.init_pair(BORDER_PAIR, 231, curses.COLOR_BLACK)
+        BORDER_ATTR = curses.color_pair(BORDER_PAIR)
+    else:
+        curses.init_pair(BORDER_PAIR, curses.COLOR_WHITE, curses.COLOR_BLACK)
+        BORDER_ATTR = curses.color_pair(BORDER_PAIR) | curses.A_BOLD
 
 
 def cell_attr(kind: str) -> int:
