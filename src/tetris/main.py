@@ -27,9 +27,10 @@ from .stats import sidebar_stats
 # Colors: pair index -> piece kind
 COLORS: dict[str, int] = {"I": 1, "O": 2, "T": 3, "S": 4, "Z": 5, "J": 6, "L": 7}
 
-# Frame rendering: reversed (solid white bar/line) so the border is a
-# categorical visual distinct from every piece color — A_DIM "white" used
-# to read as the L piece's white on terminals that ignore dim.
+# Frame rendering: a solid white bar/line (black glyph on white background,
+# pair 11) so the border is a categorical visual distinct from every piece
+# color. A_REVERSE with no color pair is dropped by some terminals, so it
+# only remains the no-color fallback; init_colors() upgrades BORDER_ATTR.
 BORDER_ATTR = curses.A_REVERSE
 
 # Drawn geometry: each cell renders as a solid 2-column block — about
@@ -85,12 +86,17 @@ def init_colors() -> None:
         8: curses.COLOR_WHITE,   # text
         9: curses.COLOR_YELLOW,  # highlights
         10: curses.COLOR_BLACK,  # flash (with white bg)
+        11: curses.COLOR_BLACK,  # border (solid white bar)
     }
     for i, fg in pairs.items():
         if i == 10:
             curses.init_pair(i, curses.COLOR_WHITE, curses.COLOR_YELLOW)
+        elif i == 11:
+            curses.init_pair(i, curses.COLOR_BLACK, curses.COLOR_WHITE)
         else:
             curses.init_pair(i, fg, curses.COLOR_BLACK)
+    global BORDER_ATTR
+    BORDER_ATTR = curses.color_pair(11)
 
 
 def cell_attr(kind: str) -> int:
