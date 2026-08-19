@@ -1,6 +1,8 @@
 # Terminal Tetris
 
-A feature-rich Tetris for your terminal, built with Python's `curses` — no dependencies.
+A feature-rich Tetris for your terminal, built with Python's `curses`. The
+game itself has no runtime dependencies; the bundled MCP play-test server
+adds `mcp` and `pyte`.
 
 ## Run
 
@@ -11,7 +13,7 @@ just test-cov   # tests with coverage
 just lint/fmt   # ruff check / format
 ```
 
-Or directly: `uv run main.py`
+Or directly: `uv run python -m tetris.main`
 
 ## Controls
 
@@ -50,6 +52,8 @@ Or directly: `uv run main.py`
 
 ## Project layout
 
-- `game.py` — pure game logic (fully unit-tested, no I/O)
-- `main.py` — curses UI & input (DAS, rendering, loop)
-- `tests/` — 59 pytest unit tests
+- `src/tetris/game.py` — pure game logic (fully unit-tested, no I/O)
+- `src/tetris/main.py` — curses UI & input (DAS, rendering, loop)
+- `src/tetris/mcp/` — MCP play-test server (`tetris-vt-server`; pty + pyte mirror,
+  run with `just mcp` — see `src/tetris/mcp/README.md`)
+- `tests/` — 79 pytest unit tests

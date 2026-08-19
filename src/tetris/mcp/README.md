@@ -1,7 +1,7 @@
 # tetris-vt
 
 An [MCP](https://modelcontextprotocol.io) server for **play-testing the terminal
-Tetris game visually**. It runs the real game (`main.py`) inside a pty
+Tetris game visually**. It runs the real game (`src/tetris/main.py`) inside a pty
 (virtual terminal) and mirrors the terminal output into a
 [pyte](https://github.com/selectel/pyte) screen, so an AI agent (or a human
 script) can send keystrokes, let time pass, and inspect exactly what is on
@@ -13,30 +13,36 @@ development.
 
 ## Layout
 
+The server lives inside the main `tetris` project — no separate package:
+
 ```
-mcp_server/
-├── pyproject.toml            # package metadata + dependencies (uv-managed)
-├── README.md                 # this file
-├── AGENTS.md                 # guidance for AI agents working on this package
-└── src/tetris_vt/
+<project root>/
+├── pyproject.toml            # single package: game + MCP server + console script
+└── src/tetris/
     ├── __init__.py
-    └── server.py             # MCP server: pty session, pyte mirror, tools
+    ├── game.py               # game logic
+    ├── main.py               # curses UI
+    └── mcp/
+        ├── __init__.py
+        ├── server.py         # MCP server: pty session, pyte mirror, tools
+        ├── README.md         # this file
+        └── AGENTS.md         # guidance for AI agents working on this package
 ```
 
 ## Setup
 
 ```sh
-cd mcp_server
-uv sync          # creates .venv with all dependencies
+# from the project root — one venv for game + server:
+uv sync
 ```
 
 ## Running manually (stdio, MCP protocol)
 
 ```sh
 # from a uvx ephemeral env (what the MCP registration uses):
-uvx --from $(pwd) tetris-vt-server
+uvx --no-cache --from $(pwd) tetris-vt-server
 
-# or from the local venv:
+# or from the project venv:
 uv run tetris-vt-server
 ```
 
@@ -58,9 +64,9 @@ The project root `.mcp.json` registers it:
   "mcpServers": {
     "tetris": {
       "command": "uvx",
-      "args": ["--no-cache", "--from", "<abs path>/mcp_server", "tetris-vt-server"],
+      "args": ["--no-cache", "--from", "<abs path to the project root>", "tetris-vt-server"],
       "env": {
-        "TETRIS_GAME_DIR": "<abs path>/tetris-game-root",
+        "TETRIS_GAME_DIR": "<abs path to the project root>",
         "TETRIS_SCORES": "/tmp/tetris-mcp-scores.json"
       }
     }
@@ -73,7 +79,7 @@ The project root `.mcp.json` registers it:
   don't invalidate it). Costs ~5 s of dependency re-downloads per start.
 * `requestTimeoutMs` — the MCP SDK's default 10 s request timeout is too
   short for a cold `--no-cache` build; the registration uses 120 s.
-* `TETRIS_GAME_DIR` must point at the game's repo root (see Gotchas).
+* `TETRIS_GAME_DIR` must point at the project root (see Gotchas).
 * `TETRIS_SCORES` keeps QA runs from touching your real high scores.
 
 ## Configuration (env vars)
@@ -81,7 +87,7 @@ The project root `.mcp.json` registers it:
 | Variable         | Default                              | Purpose                                  |
 | ---------------- | ------------------------------------ | ---------------------------------------- |
 | `TETRIS_GAME_DIR`| repo root (auto-detected; **set explicitly for uvx**) | Directory the game is launched in       |
-| `TETRIS_GAME_CMD`| `uv run main.py`                     | Command that launches the game           |
+| `TETRIS_GAME_CMD`| `uv run python -m tetris.main`     | Command that launches the game           |
 | `TETRIS_SCORES`  | `~/.local/share/terminal-tetris/scores.json` | Score file (set a temp path for isolated QA runs) |
 
 ## Tools

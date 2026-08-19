@@ -4,8 +4,8 @@ Runs the game inside a real pty (virtual terminal), mirrors its output into a
 pyte screen, and exposes tools to send keys, wait, and inspect the screen —
 so an agent can visually verify gameplay, rendering, and UI behavior.
 
-Run with:  uvx --from <path-to-mcp_server> tetris-vt-server
-or in its venv:  uv run --directory mcp_server tetris-vt-server
+Run with:  uvx --from <path-to-project> tetris-vt-server
+or in the project venv:  uv run tetris-vt-server
 """
 
 from __future__ import annotations
@@ -27,21 +27,22 @@ from pathlib import Path
 from mcp.server import MCPServer
 from pyte import Screen, Stream
 
-# Directory the game lives in (where `uv run main.py` executes).
+# Directory the game lives in (where `uv run python -m tetris.main` executes).
+# Same project as this server; auto-detection is a dev convenience.
 def _resolve_game_dir() -> Path:
     env_dir = os.environ.get("TETRIS_GAME_DIR")
     if env_dir:
         return Path(env_dir)
-    # Walk up from this file looking for the game (dev/src layout).
+    # Walk up from this file looking for the game (src layout).
     for parent in Path(__file__).resolve().parents:
-        if (parent / "main.py").is_file() and (parent / "game.py").is_file():
+        if (parent / "src" / "tetris" / "main.py").is_file():
             return parent
     # Installed as a wheel (uvx): fall back to the server's working directory.
     return Path.cwd()
 
 
 GAME_DIR = _resolve_game_dir()
-GAME_CMD = os.environ.get("TETRIS_GAME_CMD", "uv run main.py").split()
+GAME_CMD = os.environ.get("TETRIS_GAME_CMD", "uv run python -m tetris.main").split()
 READY_MARKER = "HOLD"
 
 mcp = MCPServer("tetris-vt", description="Play-test the terminal Tetris game in a virtual terminal")

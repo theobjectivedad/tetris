@@ -2,7 +2,17 @@ set shell := ["bash", "-cu"]
 
 # Start the game
 run:
-  uv run main.py
+  uv run python -m tetris.main
+
+# Build a distribution (wheel + sdist) into dist/
+build:
+  uv build
+
+# Clean up build artifacts and temporary files
+clean:
+  rm -rf build/ dist/ *.egg-info
+  find . -type d -name __pycache__ -not -path './.venv/*' -not -path './mcp_server/.venv/*' -exec rm -rf {} +
+  rm -rf .pytest_cache .ruff_cache .mypy_cache .coverage
 
 # Run the test suite
 test:
@@ -10,7 +20,7 @@ test:
 
 # Run tests with coverage
 test-cov:
-  uv run --with pytest-cov pytest --cov=main --cov-report=term-missing
+  uv run --with pytest-cov pytest --cov=tetris --cov-report=term-missing
 
 # Run interactive pytest
 test-watch:
@@ -26,4 +36,4 @@ fmt:
 
 # Run the Tetris MCP play-test server (stdio; used by the agent)
 mcp:
-  cd mcp_server && uv run tetris-vt-server
+  uv run tetris-vt-server

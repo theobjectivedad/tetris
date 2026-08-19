@@ -1,4 +1,4 @@
-"""Terminal Tetris — curses UI for the game logic in game.py."""
+"""Terminal Tetris — curses UI for the game logic in tetris.game."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import curses
 import random
 import time
 
-from game import (
+from .game import (
     BOARD_H,
     BOARD_W,
     PIECES,

@@ -1,11 +1,11 @@
-# AGENTS.md — tetris-vt package
+# AGENTS.md — tetris MCP server (src/tetris/mcp/)
 
 Guidance for AI agents developing or debugging this MCP server package.
 
 ## What this is
 
-`tetris-vt` is an MCP (stdio) server that runs the sibling Tetris game
-(`main.py` + `game.py` at the repo root) inside a **pty** and mirrors the
+`tetris-vt` is an MCP (stdio) server that runs the Tetris game from the
+*same project* (`src/tetris/main.py` + `src/tetris/game.py`) inside a **pty** and mirrors the
 terminal into a **pyte** screen. Tools (`tetris_*`) let an agent send keys,
 wait, and read the screen — i.e. visually play-test the game.
 
@@ -13,7 +13,7 @@ Stateful by design: one `GameSession` (game process + pyte screen) persists
 across tool calls. The game's state lives in the *process*; this server only
 observes and drives it.
 
-## Architecture (src/tetris_vt/server.py)
+## Architecture (src/tetris/mcp/server.py)
 
 - `GameSession` — `pty.fork()` + `os.execvp(GAME_CMD)`; child sets tty
   winsize and `chdir(GAME_DIR)`. A daemon **reader thread** drains the pty
@@ -25,12 +25,14 @@ observes and drives it.
 
 ## Conventions
 
-- Package: `src/` layout, `hatchling` backend, entrypoint
-  `tetris-vt-server = "tetris_vt.server:main"`.
+- The project is a single uv package (`src/` layout, `hatchling` backend)
+  with one console entrypoint in the root `pyproject.toml`:
+  `tetris-vt-server = "tetris.mcp.server:main"`.
 - Deps: `mcp` (≥2.0 — use `from mcp.server import MCPServer`, **not** the old
   `mcp.server.fastmcp.FastMCP` import that died in 2.0) and `pyte`.
-- Run locally: `uv sync` (uses `.venv`); the MCP registration uses
-  `uvx --no-cache --from <abs path> tetris-vt-server` (see Gotchas).
+- Run locally: `uv sync` from the project root (single `.venv`); the MCP
+  registration uses `uvx --no-cache --from <abs path> tetris-vt-server`
+  (see Gotchas).
 
 ## Gotchas (learned the hard way)
 
@@ -41,9 +43,9 @@ observes and drives it.
   mysterious "process exited before the board appeared" while `uv run`
   works fine.
 * **`__file__`-relative defaults break in a wheel.** `GAME_DIR` is resolved
-  by walking up from `server.py` looking for `main.py`+`game.py`; inside
+  by walking up from `server.py` looking for `src/tetris/main.py`; inside
   uvx's archive that walk lands in the archive dir, so the game fails with
-  `uv: Failed to spawn: main.py — No such file or directory`. **Always set
+  `uv: Failed to spawn: python — No such file or directory`. **Always set
   `TETRIS_GAME_DIR`** in the MCP env. The last-resort fallback is the
   server's cwd.
 * **Early keystrokes are lost in canonical mode.** Input written to the pty
@@ -108,7 +110,7 @@ observes and drives it.
 
 ## Verification checklist before committing
 
-- `uv sync` clean; `uv run tetris-vt-server` handshake OK.
+- `uv sync` clean; `uv run tetris-vt-server` handshake OK (from project root).
 - `uvx --no-cache --from $(pwd) tetris-vt-server` handshake OK (this is the
   registered command — absolute path in `.mcp.json`).
 - One full end-to-end play-test above passes with no tracebacks.

@@ -1,12 +1,12 @@
-"""Unit tests for the Tetris game logic (game.py)."""
+"""Unit tests for the Tetris game logic (tetris.game)."""
 
 import json
 import random
 
 import pytest
 
-import game
-from game import (
+from tetris import game
+from tetris.game import (
     BOARD_H,
     BOARD_W,
     FLASH_FRAMES,

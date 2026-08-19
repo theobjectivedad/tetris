@@ -8,9 +8,9 @@ piece to keep sliding after a single tap.
 import curses
 import random
 
-import main
-from game import Piece
-from main import BOARD_H, BOARD_W
+from tetris import main
+from tetris.game import Piece
+from tetris.main import BOARD_H, BOARD_W
 
 
 class FakeTime:

@@ -5,7 +5,7 @@
       "args": [
         "--no-cache",
         "--from",
-        "/mnt/ai/theobjectivedad/pi/mcp_server",
+        "/mnt/ai/theobjectivedad/pi",
         "tetris-vt-server"
       ],
       "requestTimeoutMs": 120000,
