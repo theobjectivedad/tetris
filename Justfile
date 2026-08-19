@@ -53,6 +53,10 @@ test-cov:
 test-watch:
   uv run --with pytest-watch ptw
 
+# Install git pre-commit hooks (mypy + ruff quality gates)
+install-hooks:
+  uv run --with pre-commit pre-commit install
+
 # Check the code
 lint:
   uv run --with ruff ruff check .

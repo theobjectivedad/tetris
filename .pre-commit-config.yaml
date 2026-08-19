@@ -1,0 +1,18 @@
+# Local (system) hooks so the project's own uv/venv tooling is used.
+# No external hook repos: this environment has no network access for
+# pre-commit to clone them.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff check (src + tests)
+        entry: uv run --with ruff ruff check src tests
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: mypy
+        name: mypy --strict (src/tetris)
+        entry: uv run --with mypy mypy src/tetris
+        language: system
+        pass_filenames: false
+        always_run: true
