@@ -27,6 +27,11 @@ from .stats import sidebar_stats
 # Colors: pair index -> piece kind
 COLORS: dict[str, int] = {"I": 1, "O": 2, "T": 3, "S": 4, "Z": 5, "J": 6, "L": 7}
 
+# Frame rendering: reversed (solid white bar/line) so the border is a
+# categorical visual distinct from every piece color — A_DIM "white" used
+# to read as the L piece's white on terminals that ignore dim.
+BORDER_ATTR = curses.A_REVERSE
+
 # Drawn geometry: each cell renders as a solid 2-column block — about
 # square on a terminal's ~2:1 char aspect — and cells are contiguous with
 # no gap, so filled regions read as one tight solid mass. The play field
@@ -126,13 +131,13 @@ def draw_modal(stdscr: curses.window, modal: Modal, max_x: int, max_y: int) -> N
         stdscr.addstr(
             by, bx,
             "┌" + "─" * left + f" {modal.title} " + "─" * (gap - left) + "┐",
-            curses.A_DIM,
+            BORDER_ATTR,
         )
         for i, line in enumerate(modal.lines):
             y = by + 1 + i
             is_cursor = modal.cursor is not None and i == modal.cursor
-            stdscr.addstr(y, bx, "│", curses.A_DIM)
-            stdscr.addstr(y, bx + width - 1, "│", curses.A_DIM)
+            stdscr.addstr(y, bx, "│", BORDER_ATTR)
+            stdscr.addstr(y, bx + width - 1, "│", BORDER_ATTR)
             # Opaque interior: blank every cell so the board/sidebar behind
             # the box cannot bleed through the padding.
             if is_cursor:
@@ -144,7 +149,7 @@ def draw_modal(stdscr: curses.window, modal: Modal, max_x: int, max_y: int) -> N
                     y, bx + 1 + (inner - len(line)) // 2, line,
                     curses.A_REVERSE if is_cursor else 0,
                 )
-        stdscr.addstr(by + height - 1, bx, "└" + "─" * inner + "┘", curses.A_DIM)
+        stdscr.addstr(by + height - 1, bx, "└" + "─" * inner + "┘", BORDER_ATTR)
     except curses.error:
         pass
 
@@ -202,11 +207,11 @@ def draw_box(stdscr: curses.window, title: str, bx: int, by: int, w: int, h: int
     """Draw a titled box; returns (inner_x, inner_y)."""
     border = f"┌{'─' * (w - 2)}┐"
     try:
-        stdscr.addstr(by, bx, border, curses.A_DIM)
-        stdscr.addstr(by + 1, bx, f"│ {title:<{w - 4}} │", curses.A_DIM)
+        stdscr.addstr(by, bx, border, BORDER_ATTR)
+        stdscr.addstr(by + 1, bx, f"│ {title:<{w - 4}} │", BORDER_ATTR)
         for i in range(h - 3):
-            stdscr.addstr(by + 2 + i, bx, f"│{' ' * (w - 2)}│", curses.A_DIM)
-        stdscr.addstr(by + h - 1, bx, f"└{'─' * (w - 2)}┘", curses.A_DIM)
+            stdscr.addstr(by + 2 + i, bx, f"│{' ' * (w - 2)}│", BORDER_ATTR)
+        stdscr.addstr(by + h - 1, bx, f"└{'─' * (w - 2)}┘", BORDER_ATTR)
     except curses.error:
         pass
     return bx + 2, by + 2
@@ -240,11 +245,11 @@ def draw_board(stdscr: curses.window, t: Tetris, bx: int, by: int, show_ghost: b
     # area (1 col per side), so blocks never render on top of them.
     right = bx + BOARD_W_DRAWN - 1
     try:
-        stdscr.addstr(by, bx, "█" * BOARD_W_DRAWN, curses.A_DIM)
-        stdscr.addstr(by + BOARD_H + 1, bx, "█" * BOARD_W_DRAWN, curses.A_DIM)
+        stdscr.addstr(by, bx, "█" * BOARD_W_DRAWN, BORDER_ATTR)
+        stdscr.addstr(by + BOARD_H + 1, bx, "█" * BOARD_W_DRAWN, BORDER_ATTR)
         for y in range(1, BOARD_H + 1):
-            stdscr.addstr(by + y, bx, "█", curses.A_DIM)
-            stdscr.addstr(by + y, right, "█", curses.A_DIM)
+            stdscr.addstr(by + y, bx, "█", BORDER_ATTR)
+            stdscr.addstr(by + y, right, "█", BORDER_ATTR)
     except curses.error:
         pass
 
