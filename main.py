@@ -16,9 +16,13 @@ from game import (
 # Colors: pair index -> piece kind
 COLORS: dict[str, int] = {"I": 1, "O": 2, "T": 3, "S": 4, "Z": 5, "J": 6, "L": 7}
 
-# Drawn width of the play field: cells are 2 chars wide with a 1-col gap
-# (pitch 3), so 10 cells span BOARD_W*3-1 columns.
+# Drawn width of the cell area: cells are 2 chars wide with a 1-col gap
+# (pitch 3), so 10 cells span BOARD_W*3-1 columns. The play field adds a
+# 2-col solid wall on each side.
 BOARD_COLS = 29
+BOARD_WALL = 2
+BOARD_W_DRAWN = BOARD_COLS + 2 * BOARD_WALL  # 33
+CELL_OFF = BOARD_WALL  # cell x=0 is drawn at bx + CELL_OFF
 
 # Key handling tuning
 # Terminals deliver their own auto-repeat while a key is held, so we just
@@ -93,14 +97,12 @@ def draw_piece_preview(stdscr: curses.window, kind: str, ix: int, iy: int, dim: 
 
 
 def draw_board(stdscr: curses.window, t: Tetris, bx: int, by: int) -> None:
-    # Solid border around the play area, drawn at cell pitch so it lines up
-    # with the blocks (2-col segments + 1-col gaps). The side walls occupy
-    # the outermost cell slots (x=0 and x=9), so a piece flush against the
-    # edge visually merges with the wall.
-    right = bx + (BOARD_W - 1) * 3
+    # Solid border around the play area. The walls are outside the cell
+    # area (2 cols per side), so blocks never render on top of them.
+    right = bx + BOARD_W_DRAWN - BOARD_WALL
     try:
-        stdscr.addstr(by, bx, "█" * BOARD_COLS, curses.A_DIM)
-        stdscr.addstr(by + BOARD_H + 1, bx, "█" * BOARD_COLS, curses.A_DIM)
+        stdscr.addstr(by, bx, "█" * BOARD_W_DRAWN, curses.A_DIM)
+        stdscr.addstr(by + BOARD_H + 1, bx, "█" * BOARD_W_DRAWN, curses.A_DIM)
         for y in range(1, BOARD_H + 1):
             stdscr.addstr(by + y, bx, "██", curses.A_DIM)
             stdscr.addstr(by + y, right, "██", curses.A_DIM)
@@ -130,7 +132,7 @@ def draw_board(stdscr: curses.window, t: Tetris, bx: int, by: int) -> None:
             else:
                 line_parts.append(("  ", None))
 
-        x_cursor = bx
+        x_cursor = bx + CELL_OFF
         for text, attr in line_parts:
             if text != "  ":
                 try:
@@ -144,7 +146,7 @@ def draw_board(stdscr: curses.window, t: Tetris, bx: int, by: int) -> None:
 
         if y in flash_rows:
             try:
-                stdscr.addstr(by + y + 1, bx, "█" * BOARD_COLS, curses.A_BLINK)
+                stdscr.addstr(by + y + 1, bx, "█" * BOARD_W_DRAWN, curses.A_BLINK)
             except curses.error:
                 pass
 
@@ -193,7 +195,7 @@ def draw_sidebar(stdscr: curses.window, t: Tetris, hs: HighScores, by: int, sx: 
 
 
 def draw_game_over(stdscr: curses.window, t: Tetris, hs: HighScores, elapsed: float, rank: int | None, bx: int, by: int) -> None:
-    interior_w = BOARD_COLS - 4  # inside the left/right walls
+    interior_w = BOARD_COLS  # the cell area, inside the walls
     lines = [
         "GAME OVER",
         "",
@@ -309,7 +311,7 @@ def game_loop(stdscr: curses.window) -> None:
 
         # ---- draw ----------------------------------------------------
         max_y, max_x = stdscr.getmaxyx()
-        sidebar_x_offset = BOARD_COLS + 4
+        sidebar_x_offset = BOARD_W_DRAWN + 4
         total_w = sidebar_x_offset + 16
         need_h = BOARD_H + 3  # top border + 20 rows + bottom border, plus 1
         if max_x < total_w or max_y < need_h:
@@ -332,7 +334,7 @@ def game_loop(stdscr: curses.window) -> None:
             draw_game_over(stdscr, t, hs, time.monotonic() - start_time, rank, bx, by)
         elif t.paused:
             try:
-                stdscr.addstr(by + BOARD_H // 2, bx + 2, " PAUSED ", curses.A_REVERSE)
+                stdscr.addstr(by + BOARD_H // 2, bx + (BOARD_W_DRAWN - 8) // 2, " PAUSED ", curses.A_REVERSE)
             except curses.error:
                 pass
         stdscr.refresh()

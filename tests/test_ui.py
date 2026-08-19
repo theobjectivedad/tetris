@@ -24,7 +24,7 @@ class FakeTime:
 
 
 class FakeScreen:
-    def __init__(self, rows: int = 30, cols: int = 50, events: list[tuple[float, int]] | None = None) -> None:
+    def __init__(self, rows: int = 30, cols: int = 60, events: list[tuple[float, int]] | None = None) -> None:
         self.rows = rows
         self.cols = cols
         self.events = list(events or [])
@@ -89,26 +89,28 @@ def run_game(events: list[tuple[float, int]], duration: float = 2.0, seed: int =
 
 
 def piece_cols(scr: FakeScreen) -> set[int]:
-    """Board columns of the live piece (topmost █ cells in the board interior).
+    """Board columns of the live piece (topmost █ cells in the cell area).
 
-    Layout math must match main.game_loop: total width 49 (board 29 + gap 4
-    + sidebar 16), board block 22 rows tall; the solid border walls occupy
-    the outer 2 columns of each interior row, so they are excluded.
+    Layout math must match main.game_loop: total width 53 (board 33 =
+    2-col walls + 29-col cell area, + gap 4 + sidebar 16), board block 22
+    rows tall. The solid walls (2 cols per side) sit OUTSIDE the cell area,
+    so the cell area spans bx+2 .. bx+30.
     """
     by = max(1, (scr.rows - 27) // 2)
-    bx = (scr.cols - 49) // 2
+    bx = (scr.cols - 53) // 2
+    lo, hi = bx + 2, bx + 30
     top_row = None
     for (y, x), ch in scr.grid.items():
-        if ch == "█" and by + 1 <= y <= by + 20 and bx + 2 <= x <= bx + 26:
+        if ch == "█" and by + 1 <= y <= by + 20 and lo <= x <= hi:
             if top_row is None or y < top_row:
                 top_row = y
     if top_row is None:
         return set()
-    # Cells are 2 chars wide with pitch 3; bx is the board origin.
+    # Cells are 2 chars wide with pitch 3.
     return {
-        (x - bx) // 3
+        (x - lo) // 3
         for (y, x), ch in scr.grid.items()
-        if ch == "█" and y == top_row and bx + 2 <= x <= bx + 26
+        if ch == "█" and y == top_row and lo <= x <= hi
     }
 
 

@@ -21,6 +21,7 @@ import struct
 import termios
 import threading
 import time
+import tty
 from pathlib import Path
 
 from mcp.server import MCPServer
@@ -81,6 +82,14 @@ class GameSession:
                     fcntl.ioctl(dev, termios.TIOCSWINSZ, winsize)
                 except OSError:
                     pass
+            # Keep the line discipline raw from the start. Input written
+            # while the child is still booting (e.g. `uv run` resolving) is
+            # lost in canonical mode — with raw, early keystrokes queue up
+            # and the game reads them once it gets to getch().
+            try:
+                tty.setraw(0)
+            except OSError:
+                pass
             for var in ("COLUMNS", "LINES"):
                 os.environ.pop(var, None)
             # ncurses needs a real terminfo entry; MCP hosts may not set TERM
@@ -194,11 +203,11 @@ def wait_for_ready(sess: GameSession, timeout: float = 10.0) -> str:
 
 @mcp.tool()
 @serialized
-def tetris_start(width: int = 50, height: int = 30) -> str:
+def tetris_start(width: int = 60, height: int = 30) -> str:
     """Start the Tetris game in a virtual terminal (pty) of the given size.
 
-    Restarts the game if one is already running. Use larger dimensions if the
-    layout reports 'Terminal too small'.
+    Restarts the game if one is already running. Minimum size is 53×23;
+    use larger dimensions if the layout reports 'Terminal too small'.
     """
     global session
     if session is not None and session.alive:

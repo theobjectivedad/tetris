@@ -99,7 +99,7 @@ The project root `.mcp.json` registers it:
 ## Typical play-test session
 
 ```
-tetris_start(width=50, height=30)
+tetris_start(width=60, height=30)                      # min 53x23
 tetris_screen()                      # inspect initial layout
 tetris_key("right", count=3)         # tap right 3 times
 tetris_screen(y0=0, y1=12)           # verify piece moved 3 cells, nothing else

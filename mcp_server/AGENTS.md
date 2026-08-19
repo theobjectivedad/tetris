@@ -46,6 +46,11 @@ observes and drives it.
   `uv: Failed to spawn: main.py — No such file or directory`. **Always set
   `TETRIS_GAME_DIR`** in the MCP env. The last-resort fallback is the
   server's cwd.
+* **Early keystrokes are lost in canonical mode.** Input written to the pty
+  while the child is still booting (`uv run` resolving, ~1 s) sits in the
+  canonical line buffer and is discarded when the app switches to raw.
+  The child therefore calls `tty.setraw(0)` *before* `execvp` so early keys
+  queue up and the game reads them once it reaches `getch()`.
 * **TERM**: the pty child inherits the server's TERM; it is forced to
   `xterm-256color` when unset/`dumb`, and `COLUMNS`/`LINES` are stripped so
   ncurses reports the pty winsize.
@@ -66,9 +71,10 @@ observes and drives it.
   be ≥ 0.05 or repeats collide.
 * **Terminal escape sequences**: send real bytes (`\x1b[C`…); the game goes
   raw itself via curses, and pyte reproduces the exact grid from the cursor
-  moves (board origin `bx=(W-49)//2, by=(H-27)//2`; the play field is
-  `BOARD_COLS=29` cols wide — cell pitch 3, 2-char cells — with solid
-  border walls in the x=0/x=9 cell slots; sidebar at `bx+33`).
+  moves (board origin `bx=(W-53)//2, by=(H-27)//2`; the play field is 33
+  cols wide — 2-col solid walls outside the 29-col cell area (cell pitch
+  3, 2-char cells) — so blocks never render over the walls; sidebar at
+  `bx+37`).
 * **Reader thread hygiene**: no `time.sleep` in the hot path; it must exit
   on EOF and `waitpid` the child so no zombie is left behind.
 * **Keep UI markers in sync**: if the game UI changes (sidebar labels,
