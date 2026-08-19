@@ -823,3 +823,28 @@ class TestNextQueue:
         assert t.next_kind == b
         # All three came from the same 7-distinct bag.
         assert t.next_kind2 not in (a, b)
+
+    def test_queue_holds_five_kinds(self) -> None:
+        t = Tetris(rng=random.Random(42))
+        assert len(t.queue) == 5
+        assert all(kind in PIECES for kind in t.queue)
+        # Spawning consumes the head and refills the tail.
+        t.hard_drop()
+        assert len(t.queue) == 5
+
+    def test_next_kind_properties_track_queue_head(self) -> None:
+        t = Tetris(rng=random.Random(7))
+        assert t.next_kind == t.queue[0]
+        assert t.next_kind2 == t.queue[1]
+
+    def test_seeded_spawn_sequence_is_stable(self) -> None:
+        # Pins the bag-pop order: the 5-deep queue pops 5 at init + 1 per
+        # spawn, exactly the same piece order as the legacy 2-slot code
+        # (2 at init + 1 per spawn), so seeded games are unchanged.
+        t = Tetris(rng=random.Random(99))
+        expected = ["S", "L", "O", "Z", "I", "T", "J", "O"]
+        seq = [t.piece.kind]
+        for _ in range(len(expected) - 1):
+            seq.append(t.next_kind)
+            t.hard_drop()
+        assert seq == expected

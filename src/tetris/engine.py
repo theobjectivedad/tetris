@@ -17,6 +17,7 @@ from .scoring import HARD_DROP_POINTS, SOFT_DROP_POINTS, Scorer
 FLASH_FRAMES = 8        # frames a cleared row stays visible
 LOCK_DELAY = 0.5        # grace period after landing before the piece locks
 LOCK_RESET_MAX = 15     # move/rotate actions that can refresh the lock timer
+QUEUE_LEN = 5           # pieces visible in the next-piece queue
 
 
 @dataclass
@@ -71,8 +72,7 @@ class Tetris:
         self.can_hold = True
         self.pending_clears: list[int] = []
         self.flash_frames = 0
-        self.next_kind = self._refill()
-        self.next_kind2 = self._refill()
+        self.queue: list[str] = [self._refill() for _ in range(QUEUE_LEN)]
         self.spins = 0
         self.events: list[Event] = []
         self.piece = self._spawn()
@@ -83,6 +83,15 @@ class Tetris:
         self._spin: bool | None = None  # T-spin of the last lock: True=full, False=mini
 
     # -- piece queue -------------------------------------------------
+
+    @property
+    def next_kind(self) -> str:
+        """First queued piece (back-compat with the legacy 2-slot API)."""
+        return self.queue[0]
+
+    @property
+    def next_kind2(self) -> str:
+        return self.queue[1]
 
     def _refill(self) -> str:
         if not self.bag:
@@ -99,9 +108,8 @@ class Tetris:
         self._last_grav = None
 
     def _spawn(self) -> Piece:
-        kind = self.next_kind
-        self.next_kind = self.next_kind2
-        self.next_kind2 = self._refill()
+        kind = self.queue.pop(0)
+        self.queue.append(self._refill())
         self._reset_fall_state()
         piece = Piece(kind=kind, x=BOARD_W // 2 - 2, y=0)
         if self._collides(piece):

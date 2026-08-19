@@ -362,3 +362,15 @@ def test_hold_off_renders_off_in_hold_box(monkeypatch, tmp_path) -> None:
     text = grid_to_text(run_game(events=[], duration=0.5))
     assert "HOLD" in text
     assert "off" in text
+
+
+def test_next_box_shows_five_previews() -> None:
+    """The NEXT box renders all five queued pieces at 2-row slot spacing."""
+    scr = run_game(events=[], duration=2.0)
+    by = max(1, (scr.rows - 27) // 2)
+    bx = (scr.cols - 42) // 2
+    sx = bx + 26  # sidebar x = board (22) + gap (4)
+    lines = "\n".join(grid_to_text_for_frame(f, scr.cols) for f in scr.frames[40:60]).splitlines()
+    for off in (0, 2, 4, 6, 8):  # preview slots at inner rows +0/+2/+4/+6/+8
+        row = by + 8 + off
+        assert "\u2588" in lines[row][sx : sx + 14], f"preview missing at slot {off}"
