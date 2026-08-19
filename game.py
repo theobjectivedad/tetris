@@ -183,13 +183,17 @@ class Tetris:
         return False
 
     def soft_drop(self) -> bool:
+        return self._move_down(award=True)
+
+    def _move_down(self, award: bool) -> bool:
         if self.game_over or self.frozen:
             return False
         p = self.piece
         q = Piece(p.kind, p.x, p.y + 1, p.rot)
         if not self._collides(q):
             self.piece = q
-            self.score += SOFT_DROP_POINTS
+            if award:
+                self.score += SOFT_DROP_POINTS
             return True
         self._lock()
         return False
@@ -235,7 +239,7 @@ class Tetris:
         """Advance one gravity step (call when drop_interval has elapsed)."""
         if self.game_over or self.paused or self.frozen:
             return
-        self.soft_drop()
+        self._move_down(award=False)
 
     def advance_flash(self) -> bool:
         """Advance flash animation one frame; returns True when it finishes

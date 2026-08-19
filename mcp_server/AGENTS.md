@@ -54,9 +54,12 @@ observes and drives it.
 * **Exit codes**: the reader thread reaps the child with
   `os.waitstatus_to_exitcode(status)` — a SIGKILLed child must never report
   exit 0.
-* **One MCP request at a time.** mcp 2.0 handles requests concurrently;
-  pipelined probes (`tetris_start` + `tetris_screen` in one batch) race and
-  get "no game running". Real clients (pi) serialize requests.
+* **Parallel tool calls are serialized on the server.** MCP hosts (incl. pi)
+  run tool calls from one message concurrently; all tools share the global
+  `session`, so every tool is wrapped in `_tool_lock` (`@serialized`).
+  Mixed parallel `tetris_stop`+`tetris_start`+`tetris_screen` therefore
+  execute one at a time and always observe a consistent session. Don't
+  remove the wrappers.
 * **`printf | server` probes close stdin at EOF**, cancelling in-flight
   responses. Keep stdin open (`; sleep N`) when scripting manual probes.
 * **The game reads one key per 20 ms frame.** `tetris_key(interval=…)` must

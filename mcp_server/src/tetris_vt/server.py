@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import codecs
 import fcntl
+import functools
 import os
 import pty
 import re
@@ -146,6 +147,18 @@ class GameSession:
 
 session: GameSession | None = None
 
+# MCP hosts (including pi) execute tool calls from a single message
+# CONCURRENTLY. All tools mutate the shared `session`, so serialize them.
+_tool_lock = threading.Lock()
+
+
+def serialized(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _tool_lock:
+            return fn(*args, **kwargs)
+    return wrapper
+
 
 def require_session() -> GameSession:
     if session is None:
@@ -180,6 +193,7 @@ def wait_for_ready(sess: GameSession, timeout: float = 10.0) -> str:
 
 
 @mcp.tool()
+@serialized
 def tetris_start(width: int = 50, height: int = 30) -> str:
     """Start the Tetris game in a virtual terminal (pty) of the given size.
 
@@ -205,6 +219,7 @@ def tetris_start(width: int = 50, height: int = 30) -> str:
 
 
 @mcp.tool()
+@serialized
 def tetris_key(key: str, count: int = 1, interval: float = 0.06) -> str:
     """Send a key (or the same key repeated `count` times, `interval` seconds apart).
 
@@ -227,6 +242,7 @@ def tetris_key(key: str, count: int = 1, interval: float = 0.06) -> str:
 
 
 @mcp.tool()
+@serialized
 def tetris_wait(seconds: float) -> str:
     """Wait real seconds (the game keeps running; gravity, flashes, etc. advance)."""
     sess = require_alive()
@@ -237,6 +253,7 @@ def tetris_wait(seconds: float) -> str:
 
 
 @mcp.tool()
+@serialized
 def tetris_screen(y0: int = 0, y1: int | None = None, x0: int = 0, x1: int | None = None) -> str:
     """Return the current screen (or a crop) as numbered text lines.
 
@@ -256,6 +273,7 @@ def tetris_screen(y0: int = 0, y1: int | None = None, x0: int = 0, x1: int | Non
 
 
 @mcp.tool()
+@serialized
 def tetris_stats() -> str:
     """Parse SCORE/BEST/LINES/LEVEL/COMBO/B2B from the sidebar and detect
     PAUSED / GAME OVER state."""
@@ -276,6 +294,7 @@ def tetris_stats() -> str:
 
 
 @mcp.tool()
+@serialized
 def tetris_state() -> str:
     """Process state: running/exited, uptime, terminal size."""
     if session is None:
@@ -289,6 +308,7 @@ def tetris_state() -> str:
 
 
 @mcp.tool()
+@serialized
 def tetris_stop(hard: bool = True) -> str:
     """Stop the game. hard=true kills the process; hard=false sends 'q' and
     waits for a clean exit."""

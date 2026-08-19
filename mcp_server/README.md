@@ -71,6 +71,8 @@ The project root `.mcp.json` registers it:
 * `--no-cache` is **required for development** — uv caches local-path builds
   and will not rebuild after you edit `server.py` (`--refresh`/`--reinstall`
   don't invalidate it). Costs ~5 s of dependency re-downloads per start.
+* `requestTimeoutMs` — the MCP SDK's default 10 s request timeout is too
+  short for a cold `--no-cache` build; the registration uses 120 s.
 * `TETRIS_GAME_DIR` must point at the game's repo root (see Gotchas).
 * `TETRIS_SCORES` keeps QA runs from touching your real high scores.
 

@@ -184,6 +184,22 @@ class TestDropping:
         locked = [(x, y) for y, row in enumerate(t.board) for x, k in enumerate(row) if k == piece.kind]
         assert max(y for _, y in locked) == BOARD_H - 1
 
+    def test_gravity_does_not_award_points(self) -> None:
+        # Regression: tick() used to route through soft_drop() and score
+        # 1 pt/cell with zero player input.
+        t = Tetris()
+        t.drop_interval = 0.001
+        before = t.score
+        for _ in range(10):
+            t.tick()
+        assert t.score == before
+
+    def test_soft_drop_still_scores_after_gravity_fix(self) -> None:
+        t = Tetris()
+        before = t.score
+        assert t.soft_drop()
+        assert t.score == before + 1
+
     def test_hard_drop_scores_two_per_cell(self) -> None:
         t = Tetris()
         dist = t.hard_drop()
