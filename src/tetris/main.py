@@ -45,7 +45,7 @@ CELL_OFF = BOARD_WALL  # cell x=0 is drawn at bx + CELL_OFF
 # Minimum terminal size: the board block (22) + gap (4) + sidebar (16) wide;
 # the sidebar is the tallest element (stats + NEW BEST indicator).
 NEED_W = BOARD_W_DRAWN + 4 + 16  # 42
-NEED_H = 30
+NEED_H = 34
 
 # Key handling tuning
 # Tap = one move; holding streams after DAS at the ARR rate (self-driven,
@@ -307,16 +307,18 @@ def draw_sidebar(stdscr: curses.window, t: Tetris, state: GameState, by: int, sx
         except curses.error:
             pass
 
-    next_x, next_y = draw_box(stdscr, "NEXT", sx, by + 7, 14, 13)
-    # Five previews at 2-row spacing; base rotation states are max 2 rows
-    # tall, so slots never overlap. Head of the queue bright, rest dim.
+    next_x, next_y = draw_box(stdscr, "NEXT", sx, by + 7, 14, 17)
+    # Five previews at 3-row pitch (one blank row between slots) so 2-row
+    # pieces never touch. Box height 17 = 14 inner rows: 5 slots at pitch 3
+    # span 4*3 + 2 = 14 rows, so the last slot's bottom row just fits.
+    # Head bright, rest dim.
     for i, kind in enumerate(t.queue[:5]):
-        draw_piece_preview(stdscr, kind, next_x, next_y + i * 2, dim=i > 0)
+        draw_piece_preview(stdscr, kind, next_x, next_y + i * 3, dim=i > 0)
 
     stats = sidebar_stats(t.snapshot(), state.best())
     for i, (label, value) in enumerate(stats):
         try:
-            stdscr.addstr(by + 21 + i, sx, f"{label:<7}{value}", curses.color_pair(8))
+            stdscr.addstr(by + 24 + i, sx, f"{label:<7}{value}", curses.color_pair(8))
         except curses.error:
             pass
 
@@ -325,9 +327,9 @@ def draw_sidebar(stdscr: curses.window, t: Tetris, state: GameState, by: int, sx
 
     if new_best:
         try:
-            stdscr.addstr(by + 29, sx, "★ NEW BEST ★", curses.A_REVERSE | curses.A_BLINK)
+            stdscr.addstr(by + 32, sx, "★ NEW BEST ★", curses.A_REVERSE | curses.A_BLINK)
         except curses.error:
-            pass  # also covers 30-row terminals where the row is off-screen
+            pass  # also covers 34-row terminals where the row is off-screen
 
 
 # Beeps per effect kind.

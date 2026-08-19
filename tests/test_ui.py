@@ -28,7 +28,7 @@ class FakeTime:
 
 
 class FakeScreen:
-    def __init__(self, rows: int = 30, cols: int = 60, events: list[tuple[float, int]] | None = None) -> None:
+    def __init__(self, rows: int = 40, cols: int = 60, events: list[tuple[float, int]] | None = None) -> None:
         self.rows = rows
         self.cols = cols
         self.events = list(events or [])
@@ -315,7 +315,7 @@ def test_settings_menu_is_paused(monkeypatch, tmp_path) -> None:
     path = tmp_path / "state.json"
     monkeypatch.setenv("TETRIS_SCORES", str(path))
 
-    by = max(1, (30 - 27) // 2)  # must match main.game_loop's layout math
+    by = max(1, (40 - 27) // 2)  # must match main.game_loop's layout math
     bx = (60 - 42) // 2
 
     with_menu = run_game(events=[(0.3, ord("s"))], duration=2.0)
@@ -371,15 +371,17 @@ def test_hold_off_renders_off_in_hold_box(monkeypatch, tmp_path) -> None:
 
 
 def test_next_box_shows_five_previews() -> None:
-    """The NEXT box renders all five queued pieces at 2-row slot spacing."""
+    """The NEXT box renders all five queued pieces at 3-row slot pitch."""
     scr = run_game(events=[], duration=2.0)
-    by = max(1, (scr.rows - 27) // 2)
     bx = (scr.cols - 42) // 2
     sx = bx + 26  # sidebar x = board (22) + gap (4)
     lines = "\n".join(grid_to_text_for_frame(f, scr.cols) for f in scr.frames[40:60]).splitlines()
-    for off in (0, 2, 4, 6, 8):  # preview slots at inner rows +0/+2/+4/+6/+8
-        row = by + 8 + off
-        assert "\u2588" in lines[row][sx : sx + 14], f"preview missing at slot {off}"
+    # Slot i's top row is screen row by + 9 + 3*i (inner origin by + 9,
+    # 3-row pitch). `lines` is 0-indexed at the first drawn row (the board
+    # top, row by), so its index is (by + 9 + 3*i) - by = 9 + 3*i.
+    for i in range(5):
+        row = 9 + 3 * i
+        assert "\u2588" in lines[row][sx : sx + 14], f"preview missing at slot {i}"
 
 
 # ---------------------------------------------------------------------------
