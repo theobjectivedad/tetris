@@ -30,16 +30,16 @@ from .stats import sidebar_stats
 # Colors: pair index -> piece kind
 COLORS: dict[str, int] = {"I": 1, "O": 2, "T": 3, "S": 4, "Z": 5, "J": 6, "L": 7}
 
-# Frame rendering: a solid bar in a gray no piece color uses (extended
-# color 231), so the border can never read as a block. init_colors()
-# upgrades BORDER_ATTR (bold white on 8-color terminals, where no
-# distinct 8th color exists; the basic 7 are all taken by pieces).
-# A_DIM remains the no-color fallback.
+# Frame rendering: the border and the board/panel background use
+# extended colors (gray 231 / near-black 235) so neither can read as a
+# block. On terminals with fewer colors ncurses maps the pairs to the
+# nearest available colors — the border falls back to the terminal's
+# default foreground (always readable) and the background fill is a
+# no-op. A_DIM remains the no-color fallback.
 BORDER_ATTR = curses.A_DIM
 BORDER_PAIR = 11
-# Board/panel background on 256-color terminals: a very dark gray (ext
-# color 235) behind the board's cell area and the HOLD/NEXT box interiors.
-# On 8-color terminals pair 12 falls back to black-on-black — a no-op.
+# Board/panel background pair (ext color 235 on capable terminals;
+# ncurses maps it to a no-op fill on terminals with fewer colors).
 BG_PAIR = 12
 
 # Drawn geometry: each cell renders as a solid 2-column block — about
@@ -116,22 +116,19 @@ def init_colors() -> None:
             curses.init_pair(i, curses.COLOR_WHITE, curses.COLOR_YELLOW)
         else:
             curses.init_pair(i, fg, curses.COLOR_BLACK)
-    # Border: a gray none of the pieces use (extended color) when the
-    # terminal supports it; bold white is the closest distinct look on
-    # 8-color terminals. NOTE: never use A_REVERSE here — with a
-    # white-fg/black-bg default it swaps to a black bar (invisible).
-    color_count = getattr(curses, "color_count", lambda: 8)
-    if color_count() >= 256:
-        curses.init_pair(BORDER_PAIR, 231, curses.COLOR_BLACK)
-        BORDER_ATTR = curses.color_pair(BORDER_PAIR)
-        # Board/panel background: a very dark gray (ext color 235) — a
-        # subtle depth fill, not a visible panel.
-        curses.init_pair(BG_PAIR, curses.COLOR_BLACK, 235)
-    else:
-        curses.init_pair(BORDER_PAIR, curses.COLOR_WHITE, curses.COLOR_BLACK)
-        BORDER_ATTR = curses.color_pair(BORDER_PAIR) | curses.A_BOLD
-        # 8-color fallback: black-on-black, so the bg fill is a no-op.
-        curses.init_pair(BG_PAIR, curses.COLOR_BLACK, curses.COLOR_BLACK)
+    # Border: a gray none of the pieces use (extended color 231) on
+    # capable terminals; on terminals with fewer colors ncurses maps the
+    # pair to the nearest available colors (the default foreground —
+    # always readable — so the border stays visible). NOTE: never use
+    # A_REVERSE here — with a white-fg/black-bg default it swaps to a
+    # black bar (invisible). The board/panel background (pair 12) is a very
+    # dark gray (ext 235): a subtle depth fill that becomes a no-op where
+    # the color is unmappable. (Some _curses builds lack color_count(), so
+    # this intentionally does not branch on it — ncurses degrades the
+    # extended pairs gracefully instead.)
+    curses.init_pair(BORDER_PAIR, 231, curses.COLOR_BLACK)
+    curses.init_pair(BG_PAIR, curses.COLOR_BLACK, 235)
+    BORDER_ATTR = curses.color_pair(BORDER_PAIR)
 
 
 def cell_attr(kind: str) -> int:
