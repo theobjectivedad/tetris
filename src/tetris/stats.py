@@ -1,21 +1,20 @@
-"""Sidebar stat labels and formatting — the single source of truth.
+"""Stat labels and formatting — the single source of truth.
 
-The curses UI (``main.py``) renders these and the MCP play-test server
-(``mcp/server.py``) parses the rendered text to recover state. Both import
-the canonical labels and value formatting from here so the renderer and the
-parser can never drift apart.
+The curses UI (``main.py``) renders these in the left stats panel and the
+MCP play-test server (``mcp/server.py``) parses the rendered text to recover
+state. Both import the canonical labels and value formatting from here so the
+renderer and the parser can never drift apart.
 """
 
 from __future__ import annotations
 
-# Canonical stat labels, in sidebar order. This tuple is the shared contract:
+# Canonical stat labels, in panel order. This tuple is the shared contract:
 # main.py renders exactly these, and mcp/server.py looks for exactly these.
-STAT_LABELS = ("SCORE", "BEST", "LINES", "LEVEL", "COMBO", "B2B", "SPINS")
+STAT_LABELS = ("SCORE", "LINES", "LEVEL", "COMBO", "B2B", "SPINS")
 
-# Which field of a Tetris.snapshot() (plus "best") backs each label.
+# Which field of a Tetris.snapshot() backs each label.
 _SNAPSHOT_KEY = {
     "SCORE": "score",
-    "BEST": "best",
     "LINES": "lines",
     "LEVEL": "level",
     "COMBO": "combo",
@@ -25,7 +24,7 @@ _SNAPSHOT_KEY = {
 
 
 def display_value(label: str, value: int | bool) -> str:
-    """Format a stat value exactly as the sidebar shows it."""
+    """Format a stat value exactly as the stats panel shows it."""
     if label in ("SCORE", "BEST"):
         return f"{int(value):,}"
     if label == "COMBO":
@@ -35,15 +34,13 @@ def display_value(label: str, value: int | bool) -> str:
     return str(value)
 
 
-def sidebar_stats(snapshot: dict[str, int | bool], best: int) -> list[tuple[str, str]]:
-    """Ordered (label, display-string) pairs for the sidebar.
+def sidebar_stats(snapshot: dict[str, int | bool]) -> list[tuple[str, str]]:
+    """Ordered (label, display-string) pairs for the left stats panel.
 
-    ``snapshot`` is ``Tetris.snapshot()``; ``best`` is the top score from
-    ``HighScores`` (not engine state, so it is passed in separately).
+    ``snapshot`` is ``Tetris.snapshot()``.
     """
-    values: dict[str, int | bool] = {**snapshot, "best": best}
     return [
-        (label, display_value(label, values[_SNAPSHOT_KEY[label]]))
+        (label, display_value(label, snapshot[_SNAPSHOT_KEY[label]]))
         for label in STAT_LABELS
     ]
 

@@ -242,7 +242,7 @@ def test_scores_modal_opens_with_h_and_pauses(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("TETRIS_SCORES", str(path))
 
     by = max(1, (40 - 27) // 2)  # must match main.game_loop's layout math
-    bx = (60 - 42) // 2
+    bx = (60 - 60) // 2 + 20  # board origin: stats (16) + gap (4)
 
     with_scores = run_game(events=[(0.3, ord("h"))], duration=2.0)
     assert "HIGH SCORES" in _frames_text(with_scores, 40, 60)
