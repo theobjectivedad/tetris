@@ -115,6 +115,24 @@ def test_esc_in_play_pauses(monkeypatch, tmp_path) -> None:
     assert "PAUSED" in _frames_text(scr, 20, 40)
 
 
+def test_esc_acting_is_snappy(monkeypatch, tmp_path) -> None:
+    """Regression: a lone ESC must act within ~120ms, not the old ~1s.
+
+    Before the fix, a bare ESC on a real pty took ~1.1s to act: ncurses
+    waits its 1000ms default ESCDELAY after a bare ESC before returning
+    it, and the 150ms app-level ESC_TTL added on top. This harness models
+    the app level on the 0.02s frame grid: a lone ESC pressed at t 0.3s
+    must have the PAUSED modal visible on a frame within 120ms of the
+    press (frames 18-20 = t 0.36-0.40s). With the old ESC_TTL = 0.15 the
+    pending ESC was only emitted at t 0.46s (frame 23), so this window
+    fails on the old code; with ESC_TTL = 0.06 the ESC is emitted at
+    t 0.36-0.38s (frames 18-19)."""
+    monkeypatch.setenv("TETRIS_SCORES", str(tmp_path / "state.json"))
+
+    scr = run_game(events=[(0.3, ESC)], duration=2.0)
+    assert "PAUSED" in _frames_text(scr, 18, 21)
+
+
 def test_esc_while_paused_resumes(monkeypatch, tmp_path) -> None:
     """ESC while the PAUSED modal is up resumes the game: PAUSED is shown
     while paused (t 0.4-0.9s) and gone after the ESC at t 0.6."""

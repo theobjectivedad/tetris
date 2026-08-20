@@ -59,15 +59,20 @@ ARR = 0.04           # auto-repeat rate (min interval between moves) while held
 HOLD_WINDOW = 0.06  # a dir-key event within this window counts as "still held"
 ROTATE_COOLDOWN = 0.12
 FRAME = 0.02          # main loop frame time (50 fps)
-ESC_TTL = 0.15        # how long a partial ESC sequence is kept while reassembling
+ESC_TTL = 0.06        # how long a partial ESC sequence is kept while reassembling;
+                      # a bare ESC is emitted after this, so keep it short — with
+                      # ncurses' 25ms set_escdelay only exotic/slow terminals can
+                      # still split a 3-byte sequence across reads
 SPAWN_ANIM_SECONDS = 0.15  # how long the new piece glides in from the NEXT box
 # Bare Escape byte; some _curses builds lack the KEY_ESCAPE constant.
 KEY_ESCAPE = getattr(curses, "KEY_ESCAPE", 27)
 
 # Arrow keys arrive as ESC [ <A/B/C/D>. With nodelay() enabled, getch() can
-# hand back the bare ESC if the sequence is split across reads; the stray
-# '[' / 'C' bytes would then be processed as ordinary keys ('C' = hold!).
-# Reassemble them here so a split sequence still becomes one arrow key.
+# hand back the bare ESC if the sequence is split across reads — either the
+# terminal is slower than the 25ms ncurses set_escdelay disambiguation
+# window, or a read boundary cut the sequence; the stray '[' / 'C' bytes
+# would then be processed as ordinary keys ('C' = hold!). Reassemble them
+# here so a split sequence still becomes one arrow key.
 ESC_SEQS = {
     (27, 0x5B, ord("A")): curses.KEY_UP,
     (27, 0x5B, ord("B")): curses.KEY_DOWN,
@@ -609,6 +614,12 @@ def game_loop(stdscr: curses.window) -> None:
     curses.curs_set(0)
     stdscr.nodelay(True)
     stdscr.keypad(True)
+    # ncurses otherwise waits its 1000ms default ESCDELAY after a bare ESC
+    # for a possible escape-sequence tail before returning it, which made
+    # ESC feel ~1s sluggish. 25ms still lets fast terminals deliver a split
+    # arrow sequence (ESC [ A/B/C) as one key, and the app-level ESC_TTL
+    # reassembly remains the fallback for slower terminals.
+    curses.set_escdelay(25)
     init_colors()
 
     state = GameState()
