@@ -103,7 +103,7 @@ on any checkout (pi spawns the server with the project root as cwd, and
 | Tool             | Description                                                        |
 | ---------------- | ------------------------------------------------------------------ |
 | `tetris_start`   | (Re)start the game in a virtual terminal (`width`/`height`)        |
-| `tetris_key`     | Send a key: `left right up down space c p q r z` (repeatable)      |
+| `tetris_key`     | Send a key: `left right up down space escape enter c p q r z` (repeatable)      |
 | `tetris_wait`    | Wait real seconds; the game keeps running                          |
 | `tetris_screen`  | Screen (or a crop) as numbered text lines; `█` solid, `▒` ghost    |
 | `tetris_stats`   | Parse SCORE/BEST/LINES/LEVEL/COMBO/B2B/SPINS; detect PAUSED / GAME OVER  |

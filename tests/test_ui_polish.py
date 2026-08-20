@@ -277,32 +277,90 @@ def test_scores_modal_opens_with_h_and_pauses(monkeypatch, tmp_path) -> None:
 
 
 def test_name_entry_flow(monkeypatch, tmp_path) -> None:
-    """Name entry: chars append, Backspace (127) deletes, Enter commits.
-    Mid-entry the modal shows ``ENTER YOUR NAME: AD█``; after Enter the
-    ranked line ``★ #1 — AD ★``; the entry is saved to the state file."""
+    """Name entry: chars append, Backspace (127) deletes, Enter commits
+    the name, saves it to the state file, and starts a new game — no
+    extra R press needed. Mid-entry the modal shows
+    ``ENTER YOUR NAME: AD█``; after Enter a fresh game (SCORE 0) with
+    no GAME OVER modal."""
     path = tmp_path / "state.json"
     monkeypatch.setenv("TETRIS_SCORES", str(path))
-    _over_tetris(monkeypatch, score=5000)  # fresh file -> rank 0
+    _over_tetris(monkeypatch, score=5000, once=True)  # replayed game runs real
 
-    # A D A, backspace -> "AD", Enter commits.
+    # A D A, backspace -> "AD", Enter commits and starts a new game.
+    # (Enter arrives as 10 from most pty/terminal setups; the caps test
+    # below covers 13/KEY_ENTER.)
     scr = run_game(
         events=[
             (0.5, ord("A")),
             (0.6, ord("D")),
             (0.7, ord("A")),
             (0.8, BACKSPACE),
-            (0.9, ENTER),
+            (0.9, 10),
         ],
         duration=1.5,
     )
     # Backspace (t 0.8) applied, Enter (t 0.9) not yet: 5-frame window
     # around frame 43 (t 0.85).
     assert "ENTER YOUR NAME: AD█" in _frames_text(scr, 41, 46)
-    # After Enter the committed ranked line is shown (window around t 1.0).
-    assert "★ #1 — AD ★" in _frames_text(scr, 48, 53)
+    # After Enter a new game has started (window around t 1.0).
+    late = _frames_text(scr, 48, 53)
+    assert "SCORE  0" in late
+    assert "GAME OVER" not in late
 
     data = json.loads(path.read_text())
     assert data["scores"][0]["name"] == "AD"
+
+
+def test_name_entry_esc_discards_and_replays(monkeypatch, tmp_path) -> None:
+    """ESC during name entry starts a new game without saving: the entry
+    recorded on game over is discarded (the state file holds no scores),
+    and late frames show a fresh game with no GAME OVER modal."""
+    path = tmp_path / "state.json"
+    monkeypatch.setenv("TETRIS_SCORES", str(path))
+    _over_tetris(monkeypatch, score=5000, once=True)  # replayed game runs real
+
+    scr = run_game(
+        events=[(0.5, ord("A")), (0.6, ord("D")), (0.7, ESC)],
+        duration=1.5,
+    )
+    # Mid-entry (t 0.6-0.7, frames 30-34) the prompt still shows "AD█".
+    assert "ENTER YOUR NAME: AD█" in _frames_text(scr, 31, 34)
+    # ESC (t 0.7): from frame ~36 on it is a fresh game.
+    late = _frames_text(scr, 40, 60)
+    assert "SCORE  0" in late
+    assert "GAME OVER" not in late
+    assert "ENTER YOUR NAME" not in late
+
+    # Nothing was saved: the recorded entry was discarded.
+    data = json.loads(path.read_text())
+    assert data["scores"] == []
+
+
+def test_esc_at_unranked_game_over_starts_new_game(monkeypatch, tmp_path) -> None:
+    """ESC on the game-over modal for a score outside the top 10 (nothing
+    to save) starts a new game; the existing score table is untouched."""
+    path = tmp_path / "state.json"
+    monkeypatch.setenv("TETRIS_SCORES", str(path))
+    entries = [
+        {"name": f"B{i}", "score": 1_000_000 + i, "lines": 1, "level": 9,
+         "date": "2026-07-01 10:00"}
+        for i in range(10)
+    ]
+    _seed_scores(path, entries)
+    _over_tetris(monkeypatch, score=5000, once=True)  # new game runs real
+
+    scr = run_game(events=[(0.5, ESC)], duration=1.5)
+    early = _frames_text(scr, 10, 24)
+    assert "GAME OVER" in early
+    assert "Best:   1,000,009" in early
+    late = _frames_text(scr, 35, 60)
+    assert "SCORE  0" in late
+    assert "GAME OVER" not in late
+
+    # The seeded table is intact — nothing recorded, nothing removed.
+    data = json.loads(path.read_text())
+    assert len(data["scores"]) == 10
+    assert data["scores"][0]["score"] == 1_000_009
 
 
 def test_name_entry_caps_at_ten(monkeypatch, tmp_path) -> None:
@@ -411,7 +469,8 @@ def test_game_over_modal_lines() -> None:
     m = build_game_over_modal(t, 999, None)
     assert m.title == "GAME OVER"
     assert m.lines[0] == f"Score   {t.score:,}"
-    assert any("R replay" in line for line in m.lines)
+    assert any("R/ESC new game" in line for line in m.lines)
+    assert any("Q quit" in line for line in m.lines)
     assert f"Best:   {999:,}" in m.lines
 
     m2 = build_game_over_modal(t, 999, 2, name="BOB", name_awaiting=False)
@@ -420,3 +479,8 @@ def test_game_over_modal_lines() -> None:
 
     m3 = build_game_over_modal(t, 999, 2, name="BO", name_awaiting=True)
     assert "ENTER YOUR NAME: BO█" in m3.lines
+    # The name-entry footer offers Enter (save + new game) and ESC
+    # (new game, no save).
+    assert "ENTER save + new game" in m3.lines
+    assert "ESC  new game, no save" in m3.lines
+    assert any("Q quit" in line for line in m3.lines)

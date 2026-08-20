@@ -93,6 +93,23 @@ def test_set_entry_name(tmp_path: Path) -> None:
     assert reloaded.entries[0]["name"] == ""
 
 
+def test_remove_entry(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    gs = GameState(path)
+    gs.record(900, 9, 2)
+    gs.record(500, 5, 1)
+    gs.record(100, 1, 1)
+
+    rank = 0
+    gs.remove_entry(rank)  # discard the top entry (e.g. ESC at game over)
+    reloaded = GameState(path)
+    assert [e["score"] for e in reloaded.entries] == [500, 100]
+
+    before = path.read_text()
+    gs.remove_entry(99)  # out of range: silent no-op, no re-save
+    assert path.read_text() == before
+
+
 def test_legacy_entries_without_name(tmp_path: Path) -> None:
     path = tmp_path / "state.json"
     path.write_text(

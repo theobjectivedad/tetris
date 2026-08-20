@@ -333,10 +333,12 @@ def test_settings_menu_is_paused(monkeypatch, tmp_path) -> None:
     assert paused_cols == piece_cols(fresh)
 
 
-def test_game_over_uses_modal_without_timer(monkeypatch) -> None:
-    """Game over renders as the centered GAME OVER modal (R replay) and no
-    longer shows the elapsed-time line."""
-    monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_over.json")
+def test_game_over_uses_modal_without_timer(monkeypatch, tmp_path) -> None:
+    """Game over renders as the centered GAME OVER modal (top-10 score on
+    a fresh score file, so it offers the name-entry footer: ENTER saves
+    + new game, ESC new game without saving) and no longer shows the
+    elapsed-time line."""
+    monkeypatch.setenv("TETRIS_SCORES", str(tmp_path / "state.json"))
 
     class OverTetris(main.Tetris):
         def __init__(self, start_level: int = 1) -> None:
@@ -348,7 +350,8 @@ def test_game_over_uses_modal_without_timer(monkeypatch) -> None:
     scr = run_game(events=[], duration=0.5)
     text = grid_to_text(scr)
     assert "GAME OVER" in text
-    assert "R replay" in text
+    assert "ENTER save + new game" in text
+    assert "ESC  new game, no save" in text
     assert "Time" not in text
 
 

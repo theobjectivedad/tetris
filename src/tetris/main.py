@@ -3,7 +3,9 @@
 Layout: three columns centered as one block — the stats panel (left),
 the board (center), and the HOLD/NEXT column (right) — plus centered
 modal dialogs (help on `?`, high scores on `h`, settings menu on `s`,
-game over with high-score name entry). Escape closes any open dialog.
+game over with high-score name entry). Escape closes any open dialog;
+at game over it starts a new game without saving the score (Enter
+saves the high score and starts a new game).
 All high scores and user settings are loaded and saved through the
 unified store in ``tetris.state``.
 """
@@ -238,6 +240,7 @@ def build_help_modal() -> Modal:
         "H scores        ? help",
         "R restart       Q quit",
         "ESC close / pause",
+        "GAME OVER: ENTER save, ESC no save",
         separator,
         "SCORING (all points × level):",
         "Single 100    Double 300",
@@ -265,8 +268,8 @@ def build_game_over_modal(
 
     When ``rank`` is not None the score made the high-score table: while
     ``name_awaiting`` the player is still typing their name (the block
-    cursor marks the input position); afterwards the rank and name are
-    displayed.
+    cursor marks the input position); Enter saves the name and starts a
+    new game, Escape starts a new game without saving.
     """
     lines = [
         f"Score   {t.score:,}",
@@ -282,7 +285,15 @@ def build_game_over_modal(
             lines.append("★ New high score ★")
     else:
         lines.append(f"Best:   {best:,}")
-    lines += ["", "R replay       Q quit"]
+    if name_awaiting:
+        lines += [
+            "",
+            "ENTER save + new game",
+            "ESC  new game, no save",
+            "Q quit",
+        ]
+    else:
+        lines += ["", "R/ESC new game       Q quit"]
     return Modal("GAME OVER", lines)
 
 
@@ -751,11 +762,14 @@ def game_loop(stdscr: curses.window) -> None:
         # ---- input -------------------------------------------------
         key = reader.next_key(stdscr, now)
 
-        # High-score name entry (game over, top-10): edit the typed name;
-        # Enter/R/Q commit (and never count as typed characters).
+        # High-score name entry (game over, top-10): edit the typed name.
+        # Enter commits and starts a new game (Enter arrives as 10 in most
+        # pty/terminal setups, 13/KEY_ENTER in others); R/Q commit first,
+        # then act on it. None of these count as typed characters.
         if t.game_over and name_awaiting:
-            if key in (13, curses.KEY_ENTER):
+            if key in (10, 13, curses.KEY_ENTER):
                 commit_name()
+                reset_game()  # keep the score, start a new game
             elif key in (ord("q"), ord("Q"), ord("r"), ord("R")):
                 commit_name()  # the q/r branch below then acts on it
             elif key in (8, 127, curses.KEY_BACKSPACE):
@@ -770,10 +784,16 @@ def game_loop(stdscr: curses.window) -> None:
                 break
         elif key in (ord("r"), ord("R")) and (t.game_over or t.paused):
             reset_game()
-        elif key in (27, KEY_ESCAPE) and not t.game_over:
-            # Escape is the "back" key: it closes a dialog, unpauses, or
-            # pauses in open play. (Q is the long-standing alias.)
-            if menu is not None:
+        elif key in (27, KEY_ESCAPE):
+            # Escape is the "back" key: at game over it starts a new game
+            # without saving the score (any recorded entry is discarded);
+            # otherwise it closes a dialog, unpauses, or pauses in open
+            # play. (Q is the long-standing quit alias.)
+            if t.game_over:
+                if rank is not None:
+                    state.remove_entry(rank)
+                reset_game()
+            elif menu is not None:
                 close_menu()
             elif t.paused:
                 t.paused = False

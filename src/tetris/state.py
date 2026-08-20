@@ -128,6 +128,18 @@ class GameState:
         self.entries[index]["name"] = _sanitize_name(name)
         self.save()
 
+    def remove_entry(self, index: int) -> None:
+        """Remove the stored entry at ``index`` and save.
+
+        Used when the player declines to keep a recorded score (ESC on
+        the game-over screen). The remaining entries stay in rank
+        order. Out-of-range indices are a silent no-op.
+        """
+        if not 0 <= index < len(self.entries):
+            return
+        del self.entries[index]
+        self.save()
+
     def update_settings(self, **changes: object) -> None:
         """Apply setting changes and save.
 
