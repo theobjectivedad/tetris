@@ -97,17 +97,20 @@ observes and drives it.
   key before locking; `tetris_key("space")` always locks instantly.
 * **Terminal escape sequences**: send real bytes (`\x1b[C`…); the game goes
   raw itself via curses, and pyte reproduces the exact grid from the cursor
-  moves (board origin `bx=(W-42)//2, by=(H-27)//2`; the play field is 22
-  cols wide — 1-col solid walls outside the 20-col cell area (solid
-  2-char cells, no gap) — so blocks never render over the walls; sidebar at
-  `bx+26`).
+  moves (one centered block: stats panel `block_x=(W-60)//2` (16 cols),
+  board at `block_x+20` with `by=(H-27)//2` — the play field is 22 cols
+  wide, 1-col solid walls outside the 20-col cell area (solid 2-char cells,
+  no gap) — so blocks never render over the walls; HOLD/NEXT column at
+  `block_x+46` = board `bx+26`).
 * **Reader thread hygiene**: no `time.sleep` in the hot path; it must exit
   on EOF and `waitpid` the child so no zombie is left behind.
-* **Keep UI markers in sync**: if the game UI changes (sidebar labels,
+* **Keep UI markers in sync**: if the game UI changes (stats labels,
   ready marker), update `wait_for_ready`'s `READY_MARKER` and the
-  `tetris_stats` regexes. Note the stats labels sit mid-line after the
-  board wall, so `tetris_stats` matches on `\bLABEL\s+` (word boundary),
-  not line start.
+  `tetris_stats` regexes. Note the stats labels are the first token of
+  their row in the left stats panel, so `tetris_stats` matches on
+  `^\s*LABEL\s+` (line start, `re.MULTILINE`), not anywhere in the line —
+  this also stops the HIGH SCORES modal's "SCORE" column header from
+  shadowing the sidebar value.
 
 ## Testing the server itself
 

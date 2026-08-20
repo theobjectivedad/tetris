@@ -1,4 +1,4 @@
-"""Tests for the sidebar-stats single source of truth (tetris.stats).
+"""Tests for the stats single source of truth (tetris.stats).
 
 These pin the shared contract between the renderer (main.py) and the parser
 (mcp/server.py): the canonical labels and the exact display formatting.
@@ -11,7 +11,7 @@ from tetris.stats import STAT_LABELS, display_value, sidebar_stats
 
 
 def test_stat_labels_are_canonical() -> None:
-    assert STAT_LABELS == ("SCORE", "BEST", "LINES", "LEVEL", "COMBO", "B2B", "SPINS")
+    assert STAT_LABELS == ("SCORE", "LINES", "LEVEL", "COMBO", "B2B", "SPINS")
 
 
 def test_snapshot_keys() -> None:
@@ -43,10 +43,9 @@ def test_sidebar_stats_matches_snapshot() -> None:
     t = Tetris()
     t.score, t.lines, t.level = 800, 4, 1
     t.combo, t.b2b, t.spins = 2, True, 1
-    pairs = dict(sidebar_stats(t.snapshot(), best=555))
+    pairs = dict(sidebar_stats(t.snapshot()))
     assert pairs == {
         "SCORE": "800",
-        "BEST": "555",
         "LINES": "4",
         "LEVEL": "1",
         "COMBO": "2",
@@ -56,10 +55,9 @@ def test_sidebar_stats_matches_snapshot() -> None:
 
 
 def test_labels_align_with_snapshot_keys() -> None:
-    # Every label must map onto a field the snapshot actually provides (plus
-    # the passed-in "best"), so the renderer can never request a missing key.
+    # Every label must map onto a field the snapshot actually provides,
+    # so the renderer can never request a missing key.
     snap = Tetris().snapshot()
-    snap["best"] = 0
-    # sidebar_stats iterates STAT_LABELS and indexes the snapshot — a missing
-    # key would raise here.
-    assert sidebar_stats(snap, best=0)
+    # sidebar_stats iterates STAT_LABELS and indexes the snapshot — a
+    # missing key would raise here.
+    assert sidebar_stats(snap)

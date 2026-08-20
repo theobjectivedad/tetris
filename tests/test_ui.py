@@ -33,6 +33,9 @@ class FakeScreen:
         self.cols = cols
         self.events = list(events or [])
         self.grid: dict[tuple[int, int], str] = {}
+        # Attr per cell (only non-zero attrs are recorded) — lets tests
+        # verify color usage; empty in monochrome runs where attr is 0.
+        self.grid_attr: dict[tuple[int, int], int] = {}
         # Snapshot of the grid at every refresh — lets tests inspect
         # intermediate frames (e.g. a modal that is open mid-run).
         self.frames: list[dict[tuple[int, int], str]] = []
@@ -54,10 +57,13 @@ class FakeScreen:
 
     def erase(self) -> None:
         self.grid = {}
+        self.grid_attr = {}
 
     def addstr(self, y: int, x: int, text: str, attr: int = 0) -> None:
         for i, ch in enumerate(text):
             self.grid[(y, x + i)] = ch
+            if attr:
+                self.grid_attr[(y, x + i)] = attr
 
     def refresh(self) -> None:
         self.frames.append(dict(self.grid))
@@ -92,7 +98,7 @@ def run_game(events: list[tuple[float, int]], duration: float = 2.0, seed: int =
     real_curses.curs_set = lambda *a, **k: None
     real_curses.has_colors = lambda: False
     real_curses.beep = lambda: None
-    # color_pair() needs initscr(); the stats sidebar calls it per line and
+    # color_pair() needs initscr(); the stats panel calls it per line and
     # the fake screen has no color initialization, so return a plain attr.
     real_curses.color_pair = lambda *a, **k: 0
     try:
@@ -127,13 +133,13 @@ def piece_cols_from_grid(grid: dict[tuple[int, int], str], by: int, bx: int) -> 
 def piece_cols(scr: FakeScreen) -> set[int]:
     """Board columns of the live piece (topmost █ cells in the cell area).
 
-    Layout math must match main.game_loop: total width 42 (board 22 =
-    1-col walls + 20-col cell area, + gap 4 + sidebar 16), board block 22
-    rows tall. Cells are 2-col solid blocks with no gap, so the cell area
-    spans bx+1 .. bx+20.
+    Layout math must match main.game_loop: total width 60 (stats 16 +
+    gap 4 + board 22 = 1-col walls + 20-col cell area + gap 4 + HOLD/NEXT
+    14), board block 22 rows tall. Cells are 2-col solid blocks with no
+    gap, so the cell area spans bx+1 .. bx+20.
     """
     by = max(1, (scr.rows - 27) // 2)
-    bx = (scr.cols - 42) // 2
+    bx = (scr.cols - 60) // 2 + 20
     return piece_cols_from_grid(scr.grid, by, bx)
 
 
@@ -316,7 +322,7 @@ def test_settings_menu_is_paused(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("TETRIS_SCORES", str(path))
 
     by = max(1, (40 - 27) // 2)  # must match main.game_loop's layout math
-    bx = (60 - 42) // 2
+    bx = (60 - 60) // 2 + 20  # board origin: stats (16) + gap (4)
 
     with_menu = run_game(events=[(0.3, ord("s"))], duration=2.0)
     # ~t=1.0: the menu has been open (since 0.3) for a full second — the
@@ -373,8 +379,8 @@ def test_hold_off_renders_off_in_hold_box(monkeypatch, tmp_path) -> None:
 def test_next_box_shows_five_previews() -> None:
     """The NEXT box renders all five queued pieces at 3-row slot pitch."""
     scr = run_game(events=[], duration=2.0)
-    bx = (scr.cols - 42) // 2
-    sx = bx + 26  # sidebar x = board (22) + gap (4)
+    bx = (scr.cols - 60) // 2 + 20  # board origin: stats (16) + gap (4)
+    sx = bx + 26  # right column x = board (22) + gap (4)
     lines = "\n".join(grid_to_text_for_frame(f, scr.cols) for f in scr.frames[40:60]).splitlines()
     # Slot i's top row is screen row by + 9 + 3*i (inner origin by + 9,
     # 3-row pitch). `lines` is 0-indexed at the first drawn row (the board
@@ -514,3 +520,26 @@ def test_pause_r_restarts(monkeypatch) -> None:
     assert "SCORE  500" in early
     assert "PAUSED" not in late
     assert "SCORE  0" in late and "SCORE  500" not in late
+
+
+def test_bg_panel_attr_on_board_and_boxes(monkeypatch) -> None:
+    """With colors, the board's cell area and the HOLD/NEXT box interiors
+    carry the BG_PAIR attr (a no-op in the monochrome run_game tests), and
+    the board border keeps its own attr."""
+    import curses
+
+    monkeypatch.setattr(curses, "has_colors", lambda: True)
+    monkeypatch.setattr(curses, "color_pair", lambda pair: 0x100 * pair)
+    bg = 0x100 * main.BG_PAIR
+
+    scr = FakeScreen()
+    main.draw_board(scr, main.Tetris(), 20, 6)
+    # Empty mid-board cells carry the bg fill (cells/ghost draw on top).
+    assert scr.grid_attr[(6 + 10, 20 + 1)] == bg
+    assert scr.grid_attr[(6 + 19, 20 + 19)] == bg
+    # The top border row keeps the border attr, not the bg fill.
+    assert scr.grid_attr[(6, 20)] == main.BORDER_ATTR
+
+    main.draw_box(scr, "HOLD", 46, 6, 14, 6)
+    # Box interior (row by+2, first inner col) carries the bg attr.
+    assert scr.grid_attr[(8, 47)] == bg

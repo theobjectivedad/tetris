@@ -1,9 +1,11 @@
 """Terminal Tetris — curses UI for the game logic in tetris.game.
 
-Screens: the board + sidebar, plus centered modal dialogs (help on `?`,
-high scores on `h`, settings menu on `s`, game over with high-score name
-entry). Escape closes any open dialog. All high scores and user settings
-are loaded and saved through the unified store in ``tetris.state``.
+Layout: three columns centered as one block — the stats panel (left),
+the board (center), and the HOLD/NEXT column (right) — plus centered
+modal dialogs (help on `?`, high scores on `h`, settings menu on `s`,
+game over with high-score name entry). Escape closes any open dialog.
+All high scores and user settings are loaded and saved through the
+unified store in ``tetris.state``.
 """
 
 from __future__ import annotations
@@ -35,6 +37,10 @@ COLORS: dict[str, int] = {"I": 1, "O": 2, "T": 3, "S": 4, "Z": 5, "J": 6, "L": 7
 # A_DIM remains the no-color fallback.
 BORDER_ATTR = curses.A_DIM
 BORDER_PAIR = 11
+# Board/panel background on 256-color terminals: a very dark gray (ext
+# color 235) behind the board's cell area and the HOLD/NEXT box interiors.
+# On 8-color terminals pair 12 falls back to black-on-black — a no-op.
+BG_PAIR = 12
 
 # Drawn geometry: each cell renders as a solid 2-column block — about
 # square on a terminal's ~2:1 char aspect — and cells are contiguous with
@@ -46,10 +52,16 @@ BOARD_WALL = 1
 BOARD_W_DRAWN = BOARD_INNER_W + 2 * BOARD_WALL  # 22
 CELL_OFF = BOARD_WALL  # cell x=0 is drawn at bx + CELL_OFF
 
-# Minimum terminal size: the board block (22) + gap (4) + sidebar (16) wide;
-# the sidebar is the tallest element (stats + NEW BEST indicator).
-NEED_W = BOARD_W_DRAWN + 4 + 16  # 42
-NEED_H = 34
+# Layout: three columns centered as one block — the stats panel (left),
+# the board block (center), and the HOLD/NEXT column (right):
+#   stats (16) + gap (4) + board (22) + gap (4) + HOLD/NEXT (14) = 60.
+STATS_W = 16
+PANEL_GAP = 4
+HOLD_W = 14
+NEED_W = STATS_W + PANEL_GAP + BOARD_W_DRAWN + PANEL_GAP + HOLD_W  # 60
+# Minimum height: everything fits in the 27-row vertical block (the NEXT
+# box's bottom row reaches by + 23 with by >= 1).
+NEED_H = 27
 
 # Key handling tuning
 # Tap = one move; holding streams after DAS at the ARR rate (self-driven,
@@ -106,13 +118,24 @@ def init_colors() -> None:
     if color_count() >= 256:
         curses.init_pair(BORDER_PAIR, 231, curses.COLOR_BLACK)
         BORDER_ATTR = curses.color_pair(BORDER_PAIR)
+        # Board/panel background: a very dark gray (ext color 235) — a
+        # subtle depth fill, not a visible panel.
+        curses.init_pair(BG_PAIR, curses.COLOR_BLACK, 235)
     else:
         curses.init_pair(BORDER_PAIR, curses.COLOR_WHITE, curses.COLOR_BLACK)
         BORDER_ATTR = curses.color_pair(BORDER_PAIR) | curses.A_BOLD
+        # 8-color fallback: black-on-black, so the bg fill is a no-op.
+        curses.init_pair(BG_PAIR, curses.COLOR_BLACK, curses.COLOR_BLACK)
 
 
 def cell_attr(kind: str) -> int:
     return curses.color_pair(COLORS[kind]) if curses.has_colors() else 0
+
+
+def bg_attr() -> int:
+    """Attr for the board/panel background fill (pair 12); 0 when the
+    terminal has no colors (the fill is plain background then — a no-op)."""
+    return curses.color_pair(BG_PAIR) if curses.has_colors() else 0
 
 
 # -- modal dialogs -----------------------------------------------------------
@@ -179,7 +202,7 @@ def build_help_modal() -> Modal:
     This is the single place the key map is documented for the player —
     it no longer sits in the sidebar at all times. The legend is laid out
     as two fixed columns (keys / actions) and a SCORING section explains
-    the sidebar stats (level, combo, B2B, spins); every row stays narrow
+    the stats panel (level, combo, B2B, spins); every row stays narrow
     enough to read on a 60-column terminal.
     """
     separator = "─" * 32
@@ -286,7 +309,11 @@ def draw_box(stdscr: curses.window, title: str, bx: int, by: int, w: int, h: int
         stdscr.addstr(by, bx, border, BORDER_ATTR)
         stdscr.addstr(by + 1, bx, f"│ {title:<{w - 4}} │", BORDER_ATTR)
         for i in range(h - 3):
-            stdscr.addstr(by + 2 + i, bx, f"│{' ' * (w - 2)}│", BORDER_ATTR)
+            # Borders keep BORDER_ATTR; the interior run gets the panel
+            # background (a no-op fill when colors are unavailable).
+            stdscr.addstr(by + 2 + i, bx, "│", BORDER_ATTR)
+            stdscr.addstr(by + 2 + i, bx + 1, " " * (w - 2), bg_attr())
+            stdscr.addstr(by + 2 + i, bx + w - 1, "│", BORDER_ATTR)
         stdscr.addstr(by + h - 1, bx, f"└{'─' * (w - 2)}┘", BORDER_ATTR)
     except curses.error:
         pass
@@ -333,6 +360,15 @@ def draw_board(
         for y in range(1, BOARD_H + 1):
             stdscr.addstr(by + y, bx, "█", BORDER_ATTR)
             stdscr.addstr(by + y, right, "█", BORDER_ATTR)
+    except curses.error:
+        pass
+
+    # Panel background behind the cell area (one addstr per row): a very
+    # dark gray on 256-color terminals, a no-op fill otherwise. Cells,
+    # the ghost, and the flash rows are drawn on top of it.
+    try:
+        for y in range(BOARD_H):
+            stdscr.addstr(by + y + 1, bx + CELL_OFF, " " * BOARD_INNER_W, bg_attr())
     except curses.error:
         pass
 
@@ -393,7 +429,7 @@ def _draw_spawn_glide(
     """Draw the newly spawned piece mid-glide from the NEXT box head to its
     spawn position. ``frac`` runs 0 (at the NEXT head) to 1 (at the grid
     position). The piece is drawn unclipped: it legitimately crosses the
-    board's right wall while flying in from the sidebar.
+    board's right wall while flying in from the HOLD/NEXT column.
 
     The "from" point uses the unshaken layout (the flight may ignore
     shake); the "to" point is the piece's current grid top-left (shake
@@ -429,8 +465,30 @@ def _draw_spawn_glide(
             pass
 
 
-def draw_sidebar(stdscr: curses.window, t: Tetris, state: GameState, by: int, sx: int, new_best: bool) -> None:
-    hold_x, hold_y = draw_box(stdscr, "HOLD", sx, by, 14, 6)
+def draw_stats_panel(stdscr: curses.window, t: Tetris, by: int, x: int, new_best: bool) -> None:
+    """The left column: the six stats at ``x`` (label dim, value bright,
+    color pair 8), starting two rows below the block top, and the
+    "★ NEW BEST ★" indicator two rows below the last stat row. The key
+    legend and version live in the help modal (`?`) instead."""
+    for i, (label, value) in enumerate(sidebar_stats(t.snapshot())):
+        try:
+            stdscr.addstr(
+                by + 2 + i, x, f"{label:<7}", curses.color_pair(8) | curses.A_DIM
+            )
+            stdscr.addstr(by + 2 + i, x + 7, value, curses.color_pair(8))
+        except curses.error:
+            pass
+
+    if new_best:
+        try:
+            stdscr.addstr(by + 9, x, "★ NEW BEST ★", curses.A_REVERSE | curses.A_BLINK)
+        except curses.error:
+            pass
+
+
+def draw_sidebar(stdscr: curses.window, t: Tetris, state: GameState, by: int, sx: int) -> None:
+    """The right column: the HOLD box at ``sx`` and the NEXT box below it."""
+    hold_x, hold_y = draw_box(stdscr, "HOLD", sx, by, HOLD_W, 6)
     if state.settings.hold:
         draw_piece_preview(stdscr, t.holding or "", hold_x, hold_y, dim=not t.can_hold)
     else:
@@ -440,29 +498,13 @@ def draw_sidebar(stdscr: curses.window, t: Tetris, state: GameState, by: int, sx
         except curses.error:
             pass
 
-    next_x, next_y = draw_box(stdscr, "NEXT", sx, by + 7, 14, 17)
+    next_x, next_y = draw_box(stdscr, "NEXT", sx, by + 7, HOLD_W, 17)
     # Five previews at 3-row pitch (one blank row between slots) so 2-row
     # pieces never touch. Box height 17 = 14 inner rows: 5 slots at pitch 3
     # span 4*3 + 2 = 14 rows, so the last slot's bottom row just fits.
     # Head bright, rest dim.
     for i, kind in enumerate(t.queue[:5]):
         draw_piece_preview(stdscr, kind, next_x, next_y + i * 3, dim=i > 0)
-
-    stats = sidebar_stats(t.snapshot(), state.best())
-    for i, (label, value) in enumerate(stats):
-        try:
-            stdscr.addstr(by + 24 + i, sx, f"{label:<7}{value}", curses.color_pair(8))
-        except curses.error:
-            pass
-
-    # The key legend and version no longer live here — they moved to the
-    # help modal (`?`) to keep the main screen clean for the player.
-
-    if new_best:
-        try:
-            stdscr.addstr(by + 32, sx, "★ NEW BEST ★", curses.A_REVERSE | curses.A_BLINK)
-        except curses.error:
-            pass  # also covers 34-row terminals where the row is off-screen
 
 
 # Beeps per effect kind.
@@ -781,7 +823,7 @@ def game_loop(stdscr: curses.window) -> None:
 
         # ---- draw ----------------------------------------------------
         max_y, max_x = stdscr.getmaxyx()
-        sidebar_x_offset = BOARD_W_DRAWN + 4
+        sidebar_x_offset = BOARD_W_DRAWN + 4  # HOLD/NEXT x = board bx + 26
         if max_x < NEED_W or max_y < NEED_H:
             stdscr.erase()
             try:
@@ -792,7 +834,10 @@ def game_loop(stdscr: curses.window) -> None:
             time.sleep(FRAME)
             continue
 
-        bx = max(0, (max_x - NEED_W) // 2)
+        # Layout: one centered block — stats panel (left), board (center),
+        # HOLD/NEXT column (right).
+        block_x = max(0, (max_x - NEED_W) // 2)
+        bx = block_x + STATS_W + PANEL_GAP  # board origin
         by = max(1, (max_y - (BOARD_H + 7)) // 2)
 
         stdscr.erase()
@@ -844,7 +889,8 @@ def game_loop(stdscr: curses.window) -> None:
                     except curses.error:
                         pass
 
-        draw_sidebar(stdscr, t, state, by, bx + sidebar_x_offset, new_best)
+        draw_stats_panel(stdscr, t, by, block_x, new_best)
+        draw_sidebar(stdscr, t, state, by, bx + sidebar_x_offset)
 
         # Spawn glide: drawn last among the non-modal elements, so it can
         # legitimately overlap the board's right wall while flying in.

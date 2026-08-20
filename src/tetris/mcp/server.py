@@ -239,7 +239,7 @@ def wait_for_ready(sess: GameSession, timeout: float = 10.0) -> str:
 def tetris_start(width: int = 60, height: int = 30) -> str:
     """Start the Tetris game in a virtual terminal (pty) of the given size.
 
-    Restarts the game if one is already running. Minimum size is 53×23;
+    Restarts the game if one is already running. Minimum size is 60×27;
     use larger dimensions if the layout reports 'Terminal too small'.
     """
     global session
@@ -323,15 +323,16 @@ def tetris_screen(
 @mcp.tool()
 @serialized
 def tetris_stats() -> str:
-    """Parse SCORE/BEST/LINES/LEVEL/COMBO/B2B from the sidebar and detect
-    PAUSED / GAME OVER state."""
+    """Parse SCORE/LINES/LEVEL/COMBO/B2B/SPINS from the left stats panel
+    and detect PAUSED / GAME OVER state."""
     sess = require_session()
     text = "\n".join(sess.text_lines())
     result = []
     for label in STAT_LABELS:
-        # The label sits mid-line, after the board wall — match on word
-        # boundary rather than line start.
-        m = re.search(rf"\b{label}\s+(\S+)", text)
+        # The label is the first token of its row in the left stats panel;
+        # anchoring at the line start keeps the HIGH SCORES modal's "SCORE"
+        # column header (and any other mid-line label) from shadowing it.
+        m = re.search(rf"^\s*{label}\s+(\S+)", text, re.MULTILINE)
         if m:
             result.append(f"{label}={m.group(1)}")
     if " PAUSED " in text:
@@ -339,7 +340,7 @@ def tetris_stats() -> str:
     if "GAME OVER" in text:
         result.append("GAME OVER")
     if not result:
-        return "could not find sidebar stats — is the game on screen?"
+        return "could not find the stats panel — is the game on screen?"
     return ", ".join(result)
 
 
