@@ -530,6 +530,7 @@ def test_bg_panel_attr_on_board_and_boxes(monkeypatch) -> None:
 
     monkeypatch.setattr(curses, "has_colors", lambda: True)
     monkeypatch.setattr(curses, "color_pair", lambda pair: 0x100 * pair)
+    main.build_attrs()  # the render path uses the cached attrs
     bg = 0x100 * main.BG_PAIR
 
     scr = FakeScreen()

@@ -51,6 +51,7 @@ BOARD_INNER_W = BOARD_W * BOARD_PITCH  # 20
 BOARD_WALL = 1
 BOARD_W_DRAWN = BOARD_INNER_W + 2 * BOARD_WALL  # 22
 CELL_OFF = BOARD_WALL  # cell x=0 is drawn at bx + CELL_OFF
+BOARD_BAR = "█" * BOARD_W_DRAWN  # the solid wall row, precomputed
 
 # Layout: three columns centered as one block — the stats panel (left),
 # the board block (center), and the HOLD/NEXT column (right):
@@ -134,13 +135,34 @@ def init_colors() -> None:
 
 
 def cell_attr(kind: str) -> int:
-    return curses.color_pair(COLORS[kind]) if curses.has_colors() else 0
+    """Attr for a piece kind (cached by build_attrs after init_colors)."""
+    return CELL_ATTRS[kind]
 
 
 def bg_attr() -> int:
     """Attr for the board/panel background fill (pair 12); 0 when the
     terminal has no colors (the fill is plain background then — a no-op)."""
     return curses.color_pair(BG_PAIR) if curses.has_colors() else 0
+
+
+# Cached attributes, built once by build_attrs() after init_colors(): the
+# render path used to call has_colors()/color_pair() (C crossings) per cell
+# — 20-60 times a frame. build_attrs() replaces that with plain lookups.
+CELL_ATTRS: dict[str, int] = {}
+FLASH_ATTR = 0   # flash row (pair 10: white on yellow)
+STAT_ATTR = 0    # stats panel text (pair 8)
+BG_ATTR = 0      # board/panel background fill (pair 12)
+
+
+def build_attrs() -> None:
+    """Cache the per-kind/global attrs after init_colors() has run
+    (color_pair() needs a live curses screen)."""
+    global FLASH_ATTR, STAT_ATTR, BG_ATTR
+    for kind, pair in COLORS.items():
+        CELL_ATTRS[kind] = curses.color_pair(pair) if curses.has_colors() else 0
+    FLASH_ATTR = curses.color_pair(10) if curses.has_colors() else 0
+    STAT_ATTR = curses.color_pair(8) if curses.has_colors() else 0
+    BG_ATTR = bg_attr()
 
 
 # -- modal dialogs -----------------------------------------------------------
@@ -317,7 +339,7 @@ def draw_box(stdscr: curses.window, title: str, bx: int, by: int, w: int, h: int
             # Borders keep BORDER_ATTR; the interior run gets the panel
             # background (a no-op fill when colors are unavailable).
             stdscr.addstr(by + 2 + i, bx, "│", BORDER_ATTR)
-            stdscr.addstr(by + 2 + i, bx + 1, " " * (w - 2), bg_attr())
+            stdscr.addstr(by + 2 + i, bx + 1, " " * (w - 2), BG_ATTR)
             stdscr.addstr(by + 2 + i, bx + w - 1, "│", BORDER_ATTR)
         stdscr.addstr(by + h - 1, bx, f"└{'─' * (w - 2)}┘", BORDER_ATTR)
     except curses.error:
@@ -360,8 +382,8 @@ def draw_board(
     # area (1 col per side), so blocks never render on top of them.
     right = bx + BOARD_W_DRAWN - 1
     try:
-        stdscr.addstr(by, bx, "█" * BOARD_W_DRAWN, BORDER_ATTR)
-        stdscr.addstr(by + BOARD_H + 1, bx, "█" * BOARD_W_DRAWN, BORDER_ATTR)
+        stdscr.addstr(by, bx, BOARD_BAR, BORDER_ATTR)
+        stdscr.addstr(by + BOARD_H + 1, bx, BOARD_BAR, BORDER_ATTR)
         for y in range(1, BOARD_H + 1):
             stdscr.addstr(by + y, bx, "█", BORDER_ATTR)
             stdscr.addstr(by + y, right, "█", BORDER_ATTR)
@@ -373,11 +395,11 @@ def draw_board(
     # the ghost, and the flash rows are drawn on top of it.
     try:
         for y in range(BOARD_H):
-            stdscr.addstr(by + y + 1, bx + CELL_OFF, " " * BOARD_INNER_W, bg_attr())
+            stdscr.addstr(by + y + 1, bx + CELL_OFF, " " * BOARD_INNER_W, BG_ATTR)
     except curses.error:
         pass
 
-    flash_rows = set(t.pending_clears)
+    flash_rows = tuple(t.pending_clears)
     ghost_cells: set[tuple[int, int]] = set()
     live_cells: dict[tuple[int, int], str] = {}
     if not t.game_over:
@@ -397,7 +419,7 @@ def draw_board(
             if (x, y) in live_cells:
                 line_parts.append(("██", cell_attr(live_cells[(x, y)])))
             elif kind:
-                line_parts.append(("██", curses.color_pair(10) if y in flash_rows and curses.has_colors() else cell_attr(kind)))
+                line_parts.append(("██", FLASH_ATTR if y in flash_rows else cell_attr(kind)))
             elif (x, y) in ghost_cells:
                 line_parts.append(("▒▒", cell_attr(t.piece.kind) | curses.A_DIM))
             else:
@@ -417,7 +439,7 @@ def draw_board(
 
         if y in flash_rows:
             try:
-                stdscr.addstr(by + y + 1, bx, "█" * BOARD_W_DRAWN, curses.A_BLINK)
+                stdscr.addstr(by + y + 1, bx, BOARD_BAR, curses.A_BLINK)
             except curses.error:
                 pass
 
@@ -478,9 +500,9 @@ def draw_stats_panel(stdscr: curses.window, t: Tetris, by: int, x: int, new_best
     for i, (label, value) in enumerate(sidebar_stats(t.snapshot())):
         try:
             stdscr.addstr(
-                by + 2 + i, x, f"{label:<7}", curses.color_pair(8) | curses.A_DIM
+                by + 2 + i, x, f"{label:<7}", STAT_ATTR | curses.A_DIM
             )
-            stdscr.addstr(by + 2 + i, x + 7, value, curses.color_pair(8))
+            stdscr.addstr(by + 2 + i, x + 7, value, STAT_ATTR)
         except curses.error:
             pass
 
@@ -663,6 +685,7 @@ def game_loop(stdscr: curses.window) -> None:
     # reassembly remains the fallback for slower terminals.
     curses.set_escdelay(25)
     init_colors()
+    build_attrs()
 
     state = GameState()
     t = Tetris(start_level=state.settings.start_level)
@@ -680,10 +703,16 @@ def game_loop(stdscr: curses.window) -> None:
     # glides too.
     anim_start: float | None = None
     last_seq = 0
+    # Static-scene detection: the scene key of the last drawn frame.
+    # When the key is unchanged (and no key was consumed, no shake is
+    # active) the screen still shows the right picture, so the frame
+    # skips erase()+all draws — refresh() stays once-per-frame (tests
+    # index frames by time) and is a cheap no-op on unchanged content.
+    prev_scene: tuple[object, ...] | None = None
 
     def reset_game() -> None:
         nonlocal t, new_best, rank, menu, was_paused, anim_start, last_seq
-        nonlocal name_awaiting, typed_name
+        nonlocal name_awaiting, typed_name, prev_scene
         t = Tetris(start_level=state.settings.start_level)
         new_best = False
         rank = None
@@ -693,6 +722,7 @@ def game_loop(stdscr: curses.window) -> None:
         last_seq = 0  # a fresh game's first piece glides in too
         name_awaiting = False
         typed_name = ""
+        prev_scene = None  # force a full redraw after a reset
         # Restart/menu: also clear any in-flight held-key stream.
         reader.reset()
         effects.clear()
@@ -851,12 +881,6 @@ def game_loop(stdscr: curses.window) -> None:
         bx = block_x + STATS_W + PANEL_GAP  # board origin
         by = max(1, (max_y - (BOARD_H + 7)) // 2)
 
-        stdscr.erase()
-
-        # Board shake: a 1-cell jitter for a couple of frames after a hard
-        # drop or a big clear.
-        ox, oy = effects.shake(now)
-
         # Spawn glide: while the new piece is still in flight the live piece
         # is hidden and drawn by the glide (below) instead; once the
         # duration has elapsed the piece simply appears at its grid
@@ -868,6 +892,51 @@ def game_loop(stdscr: curses.window) -> None:
                 anim_start = None
             else:
                 glide_frac = min(1.0, elapsed / SPAWN_ANIM_SECONDS)
+
+        # T-spin corner flash expiry (checked before the scene key so the
+        # expiry frame flips the key and redraws once without the flash).
+        if effects.spin_flash is not None and now - effects.spin_flash[1] >= 0.6:
+            effects.spin_flash = None
+
+        # ---- static-scene skip ---------------------------------------
+        # The board only mutates in _lock/_commit_clears, which always bump
+        # spawn_seq (or flip game_over/frozen), so spawn_seq + piece state
+        # cover every board/queue/ghost change; the rest covers the panels,
+        # effects, and modals. Any term flipping makes the frame dirty.
+        scene: tuple[object, ...] = (
+            max_x, max_y,  # resize / layout
+            t.game_over, t.paused, t.frozen,  # mode flips (incl. rank frame)
+            t.spawn_seq,  # every lock / clear / hold / board change
+            (t.piece.x, t.piece.y, t.piece.rot, t.piece.kind),
+            t.holding, t.can_hold,
+            t.score, t.lines, t.level, t.pieces,  # stats panel + game over
+            tuple(
+                (tx, row, int((now - born) * 2.5))
+                for tx, row, born in effects.floaters
+            ),  # floater drift, same quantization as the draw below
+            effects.spin_flash,
+            glide_frac,
+            now < effects.shake_until,  # the unshake frame must redraw
+            menu, menu_cursor, typed_name, name_awaiting,  # modal content
+            new_best, rank,
+            state.settings.ghost, state.settings.hold,
+            state.best() if t.game_over else 0,
+        )
+        if scene == prev_scene and key == -1 and now >= effects.shake_until:
+            # Nothing changed since the last drawn frame: keep the current
+            # virtual screen. refresh() still runs once per iteration —
+            # it is a no-op on unchanged content, and the test suite
+            # indexes frames by time, so the cadence must hold.
+            stdscr.refresh()
+            time.sleep(FRAME)
+            continue
+        prev_scene = scene
+
+        stdscr.erase()
+
+        # Board shake: a 1-cell jitter for a couple of frames after a hard
+        # drop or a big clear.
+        ox, oy = effects.shake(now)
 
         draw_board(
             stdscr, t, bx + ox, by + oy,
@@ -885,20 +954,17 @@ def game_loop(stdscr: curses.window) -> None:
 
         # T-spin corner flash: the four diagonals of the T's center.
         if effects.spin_flash is not None:
-            (cx, cy), st = effects.spin_flash
-            if now - st >= 0.6:
-                effects.spin_flash = None
-            else:
-                for dx, dy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
-                    px, py = cx + dx, cy + dy
-                    if not (0 <= px < BOARD_W and 0 <= py < BOARD_H):
-                        continue
-                    try:
-                        stdscr.addstr(
-                            by + oy + py, bx + ox + CELL_OFF + px * BOARD_PITCH, "▓▓", curses.A_REVERSE
-                        )
-                    except curses.error:
-                        pass
+            (cx, cy), _ = effects.spin_flash
+            for dx, dy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+                px, py = cx + dx, cy + dy
+                if not (0 <= px < BOARD_W and 0 <= py < BOARD_H):
+                    continue
+                try:
+                    stdscr.addstr(
+                        by + oy + py, bx + ox + CELL_OFF + px * BOARD_PITCH, "▓▓", curses.A_REVERSE
+                    )
+                except curses.error:
+                    pass
 
         draw_stats_panel(stdscr, t, by, block_x, new_best)
         draw_sidebar(stdscr, t, state, by, bx + sidebar_x_offset)

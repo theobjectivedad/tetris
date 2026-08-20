@@ -133,6 +133,27 @@ def test_esc_acting_is_snappy(monkeypatch, tmp_path) -> None:
     assert "PAUSED" in _frames_text(scr, 18, 21)
 
 
+def test_static_modal_keeps_frame_cadence_and_content(monkeypatch, tmp_path) -> None:
+    """Perf invariant around the static-scene skip: while the settings
+    modal sits open with no input, (a) the loop still refreshes every
+    frame — the suite indexes frames by time (i * 0.02s), so the cadence
+    must hold even when erase/draw are skipped — and (b) the rendered
+    content is identical from the first open frame to the last (no
+    drift, no stale redraw artifacts)."""
+    monkeypatch.setenv("TETRIS_SCORES", str(tmp_path / "state.json"))
+
+    scr = run_game(events=[(0.3, ord("s"))], duration=2.0)
+    texts = [grid_to_text_for_frame(f, scr.cols) for f in scr.frames]
+    # The modal opens at t=0.3 (frame 15) and stays open to the end of
+    # the run (the terminating q at t=2.0 closes it on the final frame).
+    open_idx = [i for i, t in enumerate(texts) if "SETTINGS" in t]
+    assert open_idx, "settings modal never rendered"
+    first, last = open_idx[0], open_idx[-1]
+    assert last - first >= 40, "modal did not stay open (drift? early close?)"
+    # Every frame while the modal is open renders the identical content.
+    assert all(t == texts[first] for t in texts[first + 1 : last + 1])
+
+
 def test_esc_while_paused_resumes(monkeypatch, tmp_path) -> None:
     """ESC while the PAUSED modal is up resumes the game: PAUSED is shown
     while paused (t 0.4-0.9s) and gone after the ESC at t 0.6."""
