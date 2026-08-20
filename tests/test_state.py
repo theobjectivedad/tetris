@@ -9,7 +9,7 @@ import pytest
 
 from tetris.pieces import MAX_START_LEVEL
 from tetris.settings import Settings
-from tetris.state import GameState, HighScores, default_state_path
+from tetris.state import MAX_NAME, GameState, HighScores, default_state_path
 
 _LEGACY_ENTRY = {"score": 420, "lines": 4, "level": 1, "date": "2024-01-01 10:00"}
 
@@ -43,12 +43,93 @@ def test_record_and_rank(tmp_path: Path) -> None:
     assert gs.record(200, 1, 1) == 2
 
 
-def test_keeps_top_five(tmp_path: Path) -> None:
+def test_keeps_top_ten(tmp_path: Path) -> None:
     gs = GameState(tmp_path / "state.json")
-    for score in (10, 50, 30, 90, 20, 70):
+    for score in (10, 50, 30, 90, 20, 70, 40, 80, 60, 30, 15):
         gs.record(score, 1, 1)
-    assert [e["score"] for e in gs.entries] == [90, 70, 50, 30, 20]
-    assert gs.record(5, 0, 1) is None  # below the top 5
+    assert [e["score"] for e in gs.entries] == [
+        90, 80, 70, 60, 50, 40, 30, 30, 20, 15,
+    ]  # 11th score (10) dropped
+    assert gs.record(5, 0, 1) is None  # below the top 10
+
+
+def test_record_stores_name(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    gs = GameState(path)
+    assert gs.record(300, 3, 1, name="ADA ") == 0
+
+    reloaded = GameState(path)
+    assert reloaded.entries[0]["name"] == "ADA"
+
+
+def test_name_capped_at_ten(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    gs = GameState(path)
+    gs.record(300, 3, 1, name="ABCDEFGHIJ12345")  # 15 chars
+
+    reloaded = GameState(path)
+    name = reloaded.entries[0]["name"]
+    assert name == "ABCDEFGHIJ"  # first 10 chars after strip
+    assert len(name) == MAX_NAME == 10
+
+
+def test_set_entry_name(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    gs = GameState(path)
+    gs.record(900, 9, 2)
+    gs.record(500, 5, 1)
+    gs.record(100, 1, 1)
+
+    gs.set_entry_name(1, "BOB")
+    reloaded = GameState(path)
+    assert reloaded.entries[1]["name"] == "BOB"
+
+    before = path.read_text()
+    gs.set_entry_name(99, "X")  # out of range: silent no-op, no re-save
+    assert path.read_text() == before
+
+    gs.set_entry_name(0, "   ")  # whitespace-only name stores ""
+    reloaded = GameState(path)
+    assert reloaded.entries[0]["name"] == ""
+
+
+def test_legacy_entries_without_name(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "scores": [
+                    {
+                        "score": 300,
+                        "lines": 3,
+                        "level": 2,
+                        "date": "2024-01-01 10:00",
+                    }
+                ],
+                "settings": {},
+            }
+        )
+    )
+
+    gs = GameState(path)
+    assert [e["score"] for e in gs.entries] == [300]
+    assert gs.best() == 300
+    assert gs.entries[0].get("name", "") == ""
+
+    assert gs.record(50, 1, 1) == 1  # works; ranks below the legacy entry
+    reloaded = GameState(path)
+    assert [e["score"] for e in reloaded.entries] == [300, 50]
+    assert reloaded.entries[0].get("name", "") == ""
+
+
+def test_equal_scores_first_recorded_ranks_higher(tmp_path: Path) -> None:
+    gs = GameState(tmp_path / "state.json")
+    first = gs.record(500, 1, 1)
+    second = gs.record(500, 2, 1)
+    assert first == 0
+    assert second == 1  # tie inserted below the earlier entry (stable sort)
+    scores = [(e["lines"], e["level"]) for e in gs.entries]
+    assert scores == [(1, 1), (2, 1)]
 
 
 def test_zero_score_not_recorded(tmp_path: Path) -> None:

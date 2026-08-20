@@ -17,6 +17,14 @@ from pathlib import Path
 from .pieces import MAX_START_LEVEL
 from .settings import Settings, from_dict
 
+#: Maximum length of a player name (truncated, never raised).
+MAX_NAME = 10
+
+
+def _sanitize_name(raw: object) -> str:
+    """Trim and cap a raw name; never raises (tolerates non-strings)."""
+    return str(raw).strip()[:MAX_NAME]
+
 
 def default_state_path() -> Path:
     """Where the unified state file lives (``TETRIS_SCORES`` override kept
@@ -50,7 +58,7 @@ class GameState:
     """Scores + settings in one JSON file — the only file-I/O persistence
     module (replaces the old HighScores-only file)."""
 
-    MAX = 5
+    MAX = 10
 
     def __init__(
         self, path: Path | str | None = None, *, load_legacy: bool = True
@@ -90,11 +98,14 @@ class GameState:
             return score
         return 0
 
-    def record(self, score: int, lines: int, level: int) -> int | None:
-        """Insert a result; returns its rank (0-based) or None if not top-5."""
+    def record(
+        self, score: int, lines: int, level: int, name: str = ""
+    ) -> int | None:
+        """Insert a result; returns its rank (0-based) or None if not top-10."""
         if score <= 0:
             return None
         entry: dict[str, object] = {
+            "name": _sanitize_name(name),
             "score": score,
             "lines": lines,
             "level": level,
@@ -106,6 +117,16 @@ class GameState:
         rank = next((i for i, e in enumerate(self.entries) if e is entry), None)
         self.save()
         return rank
+
+    def set_entry_name(self, index: int, name: str) -> None:
+        """Set the player name of a stored entry and save.
+
+        Out-of-range indices are a silent no-op.
+        """
+        if not 0 <= index < len(self.entries):
+            return
+        self.entries[index]["name"] = _sanitize_name(name)
+        self.save()
 
     def update_settings(self, **changes: object) -> None:
         """Apply setting changes and save.
@@ -143,4 +164,4 @@ class GameState:
 # Back-compat name: the historical score-only class (see the scores.py shim).
 HighScores = GameState
 
-__all__ = ["GameState", "HighScores", "default_state_path"]
+__all__ = ["MAX_NAME", "GameState", "HighScores", "default_state_path"]

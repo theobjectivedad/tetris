@@ -60,11 +60,14 @@ KEYS: dict[str, bytes] = {
     "right": b"\x1b[C",
     "up": b"\x1b[A",
     "down": b"\x1b[B",
+    "escape": b"\x1b",
     "space": b" ",
     "c": b"c",
+    "h": b"h",
     "p": b"p",
     "q": b"q",
     "r": b"r",
+    "s": b"s",
     "z": b"z",
 }
 
@@ -251,7 +254,8 @@ def tetris_start(width: int = 60, height: int = 30) -> str:
     return (
         f"game running (pid {sess.pid}) in a {width}×{height} virtual terminal.\n"
         "Keys: left/right move, up/Z rotate, down soft drop, space hard drop, "
-        "c hold, p pause, ? help, s settings, r restart, q quit.\n"
+        "c hold, p pause, ? help, h high scores, s settings, escape close/pause, "
+        "r restart, q quit.\n"
         "Use tetris_key to send input, tetris_wait to let time pass, "
         "tetris_screen to view the screen, tetris_stats for score/level/lines."
     )
@@ -262,7 +266,8 @@ def tetris_start(width: int = 60, height: int = 30) -> str:
 def tetris_key(key: str, count: int = 1, interval: float = 0.06) -> str:
     """Send a key (or the same key repeated `count` times, `interval` seconds apart).
 
-    Keys: left, right, up, down, space, c, p, q, r, z.
+    Keys: left, right, up, down, space, escape, and any single character
+    (c, h, p, q, r, s, z, ? …).
     To simulate holding a key, repeat with interval ~0.05-0.1 (terminal
     auto-repeat rate). Unknown names are sent as a single character.
     """

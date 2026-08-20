@@ -640,11 +640,13 @@ class TestHighScores:
         assert loaded.best() == 420
         assert loaded.entries == raw["scores"]
 
-    def test_keeps_top_five(self, tmp_path) -> None:
+    def test_keeps_top_ten(self, tmp_path) -> None:
         hs = HighScores(tmp_path / "scores.json")
-        for score in (10, 50, 30, 90, 20, 70):
+        for score in (10, 50, 30, 90, 20, 70, 40, 80, 60, 30, 15):
             hs.record(score, 1, 1)
-        assert [e["score"] for e in hs.entries] == [90, 70, 50, 30, 20]
+        assert [e["score"] for e in hs.entries] == [
+            90, 80, 70, 60, 50, 40, 30, 30, 20, 15,
+        ]
 
     def test_zero_score_not_recorded(self, tmp_path) -> None:
         hs = HighScores(tmp_path / "scores.json")

@@ -1,8 +1,9 @@
 """Terminal Tetris — curses UI for the game logic in tetris.game.
 
 Screens: the board + sidebar, plus centered modal dialogs (help on `?`,
-settings menu on `s`, game over). All high scores and user settings are
-loaded and saved through the unified store in ``tetris.state``.
+high scores on `h`, settings menu on `s`, game over with high-score name
+entry). Escape closes any open dialog. All high scores and user settings
+are loaded and saved through the unified store in ``tetris.state``.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from .game import (
     Tetris,
 )
 from .settings import OPTIONS, Settings, cycle, format_value, value_of
-from .state import GameState
+from .state import MAX_NAME, GameState
 from .stats import sidebar_stats
 
 # Colors: pair index -> piece kind
@@ -60,6 +61,8 @@ ROTATE_COOLDOWN = 0.12
 FRAME = 0.02          # main loop frame time (50 fps)
 ESC_TTL = 0.15        # how long a partial ESC sequence is kept while reassembling
 SPAWN_ANIM_SECONDS = 0.15  # how long the new piece glides in from the NEXT box
+# Bare Escape byte; some _curses builds lack the KEY_ESCAPE constant.
+KEY_ESCAPE = getattr(curses, "KEY_ESCAPE", 27)
 
 # Arrow keys arrive as ESC [ <A/B/C/D>. With nodelay() enabled, getch() can
 # hand back the bare ESC if the sequence is split across reads; the stray
@@ -171,34 +174,65 @@ def draw_modal(stdscr: curses.window, modal: Modal, max_x: int, max_y: int) -> N
 
 
 def build_help_modal() -> Modal:
-    """The `?` help dialog: the key legend plus the version.
+    """The `?` help dialog: aligned key legend, scoring explainer, version.
 
     This is the single place the key map is documented for the player —
-    it no longer sits in the sidebar at all times.
+    it no longer sits in the sidebar at all times. The legend is laid out
+    as two fixed columns (keys / actions) and a SCORING section explains
+    the sidebar stats (level, combo, B2B, spins); every row stays narrow
+    enough to read on a 60-column terminal.
     """
+    separator = "─" * 32
     lines = [
-        "←/→ move        ↑ rotate CW    Z rotate CCW",
-        "↓ soft drop     SPACE hard drop",
-        "C hold          P pause",
-        "S settings      ? help",
-        "R restart (paused/over)    Q quit",
-        "",
-        "Q or ? closes this dialog",
-        "",
-        f"v{__version__}",
+        "←/→ move        SPACE hard drop",
+        "↑ rotate CW     Z rotate CCW",
+        "↓ soft drop     C hold",
+        "P pause         S settings",
+        "H scores        ? help",
+        "R restart       Q quit",
+        "ESC close / pause",
+        separator,
+        "SCORING (all points × level):",
+        "Single 100    Double 300",
+        "Triple 500    Tetris 800",
+        "T-spin: 200-1600 by lines cleared",
+        "T-spin, no lines: 100 mini / 400",
+        "Every 10 lines: level up (faster)",
+        "COMBO +50×combo×level per clear run",
+        "B2B 1.5× for Tetris/T-spin streaks",
+        "SPINS: full T-spins this game",
+        separator,
+        f"v{__version__.split('+')[0]}",
     ]
     return Modal("HELP", lines)
 
 
-def build_game_over_modal(t: Tetris, best: int, rank: int | None) -> Modal:
-    """The game-over dialog, shown as a modal instead of inside the board."""
+def build_game_over_modal(
+    t: Tetris,
+    best: int,
+    rank: int | None,
+    name: str = "",
+    name_awaiting: bool = False,
+) -> Modal:
+    """The game-over dialog, shown as a modal instead of inside the board.
+
+    When ``rank`` is not None the score made the high-score table: while
+    ``name_awaiting`` the player is still typing their name (the block
+    cursor marks the input position); afterwards the rank and name are
+    displayed.
+    """
     lines = [
-        f"Score:  {t.score:,}",
-        f"Lines {t.lines}    Level {t.level}",
-        f"Pieces {t.pieces}",
+        f"Score   {t.score:,}",
+        f"Lines   {t.lines}    Level {t.level}",
+        f"Pieces  {t.pieces}",
     ]
     if rank is not None:
-        lines.append("★ New high score ★")
+        if name_awaiting:
+            lines.append(f"ENTER YOUR NAME: {name}█")
+        elif name:
+            lines.append(f"★ #{rank + 1} — {name} ★")
+        else:
+            lines.append("★ New high score ★")
     else:
         lines.append(f"Best:   {best:,}")
     lines += ["", "R replay       Q quit"]
@@ -207,16 +241,42 @@ def build_game_over_modal(t: Tetris, best: int, rank: int | None) -> Modal:
 
 def build_pause_modal() -> Modal:
     """The pause dialog: resume / restart / quit."""
-    return Modal("PAUSED", ["", "P resume     R restart     Q quit", ""])
+    return Modal("PAUSED", ["", "P/ESC resume  R restart  Q quit", ""])
 
 
 def build_settings_modal(settings: Settings, cursor: int) -> Modal:
-    """The `s` settings dialog: one row per option, cursor row highlighted."""
+    """The `s` settings dialog: one row per option, cursor row highlighted.
+
+    Every option row is a fixed 22 chars — the label left-justified in a
+    14-col field, the value right-justified in an 8-col field — so the
+    centered rows line up in perfectly aligned columns.
+    """
     lines = [
-        f"{opt.label:<14} {format_value(value_of(settings, opt.key))}" for opt in OPTIONS
+        f"{opt.label:<14}{format_value(value_of(settings, opt.key)):>8}" for opt in OPTIONS
     ]
-    lines += ["", "↑/↓ select      ←/→ change      Q close"]
+    lines += ["", "↑/↓ select    ←/→ change    ESC close"]
     return Modal("SETTINGS", lines, cursor=cursor)
+
+
+def build_scores_modal(state: GameState) -> Modal:
+    """The `h` high-scores dialog: the top-10 table.
+
+    Columns: rank, name (— when unset), comma-formatted score, level, and
+    the YYYY-MM-DD date. Rows are a fixed 39 chars so the table lines up.
+    """
+    lines: list[str] = [f"{'#':>2}  {'NAME':<10}{'SCORE':>9}{'LVL':>4}  DATE"]
+    for i, entry in enumerate(state.entries[:10], start=1):
+        name = str(entry.get("name") or "").strip() or "—"
+        score = entry.get("score")
+        score = score if isinstance(score, int) and not isinstance(score, bool) else 0
+        level = entry.get("level")
+        level = level if isinstance(level, int) and not isinstance(level, bool) else 0
+        date = str(entry.get("date") or "")[:10]
+        lines.append(f"{i:>2}  {name:<10}{score:>9,}{level:>4}  {date}")
+    if not state.entries:
+        lines = ["No scores yet — play a game!"]
+    lines += ["", "ESC close"]
+    return Modal("HIGH SCORES", lines)
 
 
 def draw_box(stdscr: curses.window, title: str, bx: int, by: int, w: int, h: int = 6) -> tuple[int, int]:
@@ -427,38 +487,48 @@ class KeyReader:
         self._last_move = 0.0
 
     def reset(self) -> None:
-        # Restart/menu resets the move throttle and any in-flight hold.
+        # Restart/menu resets the move throttle, any in-flight hold, and
+        # any partially reassembled ESC sequence (stale bytes must never
+        # leak into or out of a modal).
         self._last_move = 0.0
         self._dir = 0
+        self._esc_seq = []
 
     def next_key(self, stdscr: curses.window, now: float) -> int:
         """Return the next logical key, or -1 if no input is pending.
 
-        Splits of a 3-byte arrow sequence (ESC [ A/B/C) are reassembled here;
-        a lone ESC that never completes within ESC_TTL is dropped.
+        Splits of a 3-byte arrow sequence (ESC [ A/B/C) are reassembled
+        here. A lone ESC that never completes within ESC_TTL is a real
+        Escape press: it is emitted, and whatever input follows it is
+        still delivered next frame instead of being eaten.
         """
+        # An ESC from an earlier frame that never became an arrow
+        # sequence: emit it BEFORE reading further input so the input
+        # that followed it is not lost.
+        if self._esc_seq and now - self._esc_t > ESC_TTL:
+            self._esc_seq = []
+            return 27
         raw = stdscr.getch()
         if raw == -1:
             return -1
-        key = -1
         if self._esc_seq:
-            if now - self._esc_t > ESC_TTL:
+            if raw == 27:
+                # A fresh ESC while one is already pending: emit the
+                # pending one now and start tracking the new press.
+                self._esc_seq = [27]
+                self._esc_t = now
+                return 27
+            self._esc_seq.append(raw)
+            if len(self._esc_seq) == 3:
+                key = ESC_SEQS.get(cast("tuple[int, int, int]", tuple(self._esc_seq)), -1)
                 self._esc_seq = []
-            if not self._esc_seq:
-                if raw == 27:
-                    self._esc_seq = [27]
-                    self._esc_t = now
-            else:
-                self._esc_seq.append(raw)
-                if len(self._esc_seq) == 3:
-                    key = ESC_SEQS.get(cast("tuple[int, int, int]", tuple(self._esc_seq)), -1)
-                    self._esc_seq = []
-        elif raw == 27:
+                return key  # -1: an unknown 3-byte ESC sequence, dropped
+            return -1
+        if raw == 27:
             self._esc_seq = [27]
             self._esc_t = now
-        else:
-            key = raw
-        return key
+            return -1
+        return raw
 
     def on_direction(self, d: int, now: float) -> bool:
         """Handle a left/right key event; True if the piece should move.
@@ -547,8 +617,10 @@ def game_loop(stdscr: curses.window) -> None:
     rank: int | None = None
     reader = KeyReader()
     effects = Effects()
-    menu: str | None = None  # None | "help" | "settings"
+    menu: str | None = None  # None | "help" | "settings" | "scores"
     menu_cursor = 0
+    name_awaiting = False  # game over: high-score name still being typed
+    typed_name = ""
     was_paused = False
     # Spawn animation: the new piece glides in from the NEXT box head.
     # last_seq starts at 0 (not t.spawn_seq) so the very first piece
@@ -558,6 +630,7 @@ def game_loop(stdscr: curses.window) -> None:
 
     def reset_game() -> None:
         nonlocal t, new_best, rank, menu, was_paused, anim_start, last_seq
+        nonlocal name_awaiting, typed_name
         t = Tetris(start_level=state.settings.start_level)
         new_best = False
         rank = None
@@ -565,6 +638,8 @@ def game_loop(stdscr: curses.window) -> None:
         was_paused = False
         anim_start = None
         last_seq = 0  # a fresh game's first piece glides in too
+        name_awaiting = False
+        typed_name = ""
         # Restart/menu: also clear any in-flight held-key stream.
         reader.reset()
         effects.clear()
@@ -583,11 +658,31 @@ def game_loop(stdscr: curses.window) -> None:
         t.paused = was_paused
         menu = None
 
+    def commit_name() -> None:
+        """Store the typed name on the new high-score entry (if any)."""
+        nonlocal name_awaiting
+        if rank is not None:
+            state.set_entry_name(rank, typed_name)
+        name_awaiting = False
+
     while True:
         now = time.monotonic()
 
         # ---- input -------------------------------------------------
         key = reader.next_key(stdscr, now)
+
+        # High-score name entry (game over, top-10): edit the typed name;
+        # Enter/R/Q commit (and never count as typed characters).
+        if t.game_over and name_awaiting:
+            if key in (13, curses.KEY_ENTER):
+                commit_name()
+            elif key in (ord("q"), ord("Q"), ord("r"), ord("R")):
+                commit_name()  # the q/r branch below then acts on it
+            elif key in (8, 127, curses.KEY_BACKSPACE):
+                typed_name = typed_name[:-1]
+            elif 32 <= key <= 126 and len(typed_name) < MAX_NAME:
+                typed_name += chr(key)
+
         if key in (ord("q"), ord("Q")):
             if menu is not None:
                 close_menu()  # in a modal, Q closes the dialog, never quits
@@ -595,6 +690,15 @@ def game_loop(stdscr: curses.window) -> None:
                 break
         elif key in (ord("r"), ord("R")) and (t.game_over or t.paused):
             reset_game()
+        elif key in (27, KEY_ESCAPE) and not t.game_over:
+            # Escape is the "back" key: it closes a dialog, unpauses, or
+            # pauses in open play. (Q is the long-standing alias.)
+            if menu is not None:
+                close_menu()
+            elif t.paused:
+                t.paused = False
+            else:
+                t.paused = True
         elif key == ord("?") and not t.game_over:
             if menu == "help":
                 close_menu()  # ? toggles the help dialog
@@ -603,6 +707,8 @@ def game_loop(stdscr: curses.window) -> None:
         elif key in (ord("s"), ord("S")) and menu is None and not t.game_over:
             menu_cursor = 0
             open_menu("settings")
+        elif key in (ord("h"), ord("H")) and menu is None and not t.game_over:
+            open_menu("scores")
         elif key in (ord("p"), ord("P")) and menu is None:
             t.paused = not t.paused
         elif menu == "settings" and not t.game_over:
@@ -659,6 +765,7 @@ def game_loop(stdscr: curses.window) -> None:
             rank = state.record(t.score, t.lines, t.level)
             if rank is not None:
                 new_best = True
+                name_awaiting = True
 
         # ---- spawn animation ---------------------------------------------
         # A new piece has appeared (initial spawn, after a lock, a hold,
@@ -746,11 +853,18 @@ def game_loop(stdscr: curses.window) -> None:
 
         # ---- modals: game over / help / settings ---------------------
         if t.game_over:
-            draw_modal(stdscr, build_game_over_modal(t, state.best(), rank), max_x, max_y)
+            draw_modal(
+                stdscr,
+                build_game_over_modal(t, state.best(), rank, typed_name, name_awaiting),
+                max_x,
+                max_y,
+            )
         elif menu == "help":
             draw_modal(stdscr, build_help_modal(), max_x, max_y)
         elif menu == "settings":
             draw_modal(stdscr, build_settings_modal(state.settings, menu_cursor), max_x, max_y)
+        elif menu == "scores":
+            draw_modal(stdscr, build_scores_modal(state), max_x, max_y)
         elif t.paused:
             draw_modal(stdscr, build_pause_modal(), max_x, max_y)
         stdscr.refresh()
