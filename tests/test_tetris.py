@@ -265,6 +265,62 @@ class TestRotation:
 
 
 # ---------------------------------------------------------------------------
+# 180° rotation (X)
+# ---------------------------------------------------------------------------
+
+
+class TestRotate180:
+    @pytest.mark.parametrize("kind", ["J", "L", "S", "Z", "T"])
+    @pytest.mark.parametrize("rot", [0, 1])
+    def test_free_space_flip(self, kind: str, rot: int) -> None:
+        """In open space the flip is in place: rot 0→2 / 1→3, same x/y,
+        no collision, and the version counter bumps for the UI redraw."""
+        t = Tetris()
+        t.piece = game.Piece(kind, x=4, y=5, rot=rot)
+        before = t.version
+        assert t.rotate_180()
+        assert t.piece.rot == rot + 2
+        assert (t.piece.x, t.piece.y) == (4, 5)
+        assert not t._collides(t.piece)
+        assert t.version == before + 1
+
+    def test_i_piece_is_refused(self) -> None:
+        """The I piece's 180° is a no-op modulo the 4×4 box row, so it is
+        always refused and leaves the piece untouched."""
+        t = Tetris()
+        t.piece = game.Piece("I", x=3, y=5, rot=0)
+        before = t.version
+        assert not t.rotate_180()
+        assert (t.piece.x, t.piece.y, t.piece.rot) == (3, 5, 0)
+        assert t.version == before
+
+    def test_kick_right_when_straight_flip_blocked(self) -> None:
+        """The straight flip collides (a block under the flipped nub) but
+        the (1,0) kick fits: the piece lands one cell to the right."""
+        t = Tetris()
+        # T rot 0 at (4, 10): flipped in place its nub would land on (5, 12).
+        t.piece = game.Piece("T", x=4, y=10)
+        t.board[12][5] = "O"
+        assert t.rotate_180()
+        assert t.piece.rot == 2
+        assert (t.piece.x, t.piece.y) == (5, 10)
+        assert not t._collides(t.piece)
+
+    def test_kick_up_when_all_side_kicks_blocked(self) -> None:
+        """With (0,0), (1,0) and (-1,0) all blocked the (0,1) kick lifts
+        the piece one row (SRS y-up): same x, one row higher up."""
+        t = Tetris()
+        t.piece = game.Piece("T", x=4, y=10)
+        t.board[12][5] = "O"  # blocks the straight flip (nub below)
+        t.board[11][7] = "O"  # blocks the (1,0) kick
+        t.board[11][3] = "O"  # blocks the (-1,0) kick
+        assert t.rotate_180()
+        assert t.piece.rot == 2
+        assert (t.piece.x, t.piece.y) == (4, 9)
+        assert not t._collides(t.piece)
+
+
+# ---------------------------------------------------------------------------
 # Dropping
 # ---------------------------------------------------------------------------
 
@@ -733,6 +789,21 @@ class TestLockDelay:
         t.tick(2.0)
         assert t.pieces == 1
 
+    def test_rotate_180_refreshes_lock_timer(self) -> None:
+        t = Tetris()
+        # T resting on the floor: the in-place flip would poke below the
+        # floor, so the (0,1) kick lifts it a row — a rotate action that
+        # must refresh the lock timer like any other rotate.
+        t.piece = game.Piece("T", 4, BOARD_H - 2)
+        t.tick(1.0)  # registers as grounded at t=1.0
+        assert t.rotate_180(1.4)
+        assert t._resets == 1
+        assert t.piece.rot == 2 and t.piece.y == BOARD_H - 3
+        t.tick(1.85)  # < 0.5 s since the refresh at 1.4
+        assert t.pieces == 0
+        t.tick(2.0)
+        assert t.pieces == 1
+
     def test_resets_are_capped(self) -> None:
         t, _ = self._grounded()
         for i in range(LOCK_RESET_MAX):
@@ -914,6 +985,23 @@ class TestVersion:
             t.board[y][x] = ""
         before = t.version
         assert not t.rotate(1)
+        assert t.version == before
+
+    def test_successful_rotate_180_bumps_version(self) -> None:
+        t = Tetris()
+        t.piece = game.Piece("T", x=4, y=5)
+        before = t.version
+        assert t.rotate_180()
+        assert t.version == before + 1
+
+    def test_failed_rotate_180_does_not_bump(self) -> None:
+        t = Tetris()
+        t.piece = game.Piece("T", x=4, y=9)
+        t.board = Board.from_rows([["T"] * BOARD_W for _ in range(BOARD_H)])
+        for x, y in t.piece.cells():
+            t.board[y][x] = ""
+        before = t.version
+        assert not t.rotate_180()
         assert t.version == before
 
     def test_successful_soft_drop_bumps_version(self) -> None:
