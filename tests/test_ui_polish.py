@@ -485,3 +485,39 @@ def test_game_over_modal_lines() -> None:
     assert "ENTER save + new game" in m3.lines
     assert "ESC  new game, no save" in m3.lines
     assert any("Q quit" in line for line in m3.lines)
+
+
+def test_keyreader_honors_custom_das_arr() -> None:
+    """P4: KeyReader streams with the live DAS/ARR values (settings), not
+    frozen module constants — simulated held-key input, no curses.
+    """
+    from tetris.main import ARR, DAS, KeyReader
+
+    # Defaults preserve the classic feel.
+    assert KeyReader().das == DAS
+    assert KeyReader().arr == ARR
+
+    def streamed_moves(das: float, arr: float) -> int:
+        """Moves authorized over 250 ms of a held RIGHT key, where the
+        terminal auto-repeat delivers a repeat event every 30 ms (the
+        realistic input pattern: repeats arrive while held)."""
+        r = KeyReader()
+        r.das, r.arr = das, arr
+        moves = 0
+        t = 1.0  # start at t=1.0: real time.monotonic() is far past 0, so
+        # the t=0 anti-double-fire guard (initial _last_move=0.0) is idle
+        while t <= 1.25:
+            if r.on_direction(1, t):
+                moves += 1
+            moves += r.auto_direction(t)
+            t = round(t + 0.03, 9)
+        return moves
+
+    default_moves = streamed_moves(0.17, 0.04)
+    assert default_moves > 1  # sanity: the hold actually streams
+    # A longer ARR (0.08 vs 0.04) must stream strictly FEWER moves over
+    # the same window; a shorter DAS (0.05 vs 0.17) starts streaming
+    # earlier and streams strictly MORE than the default.
+    assert streamed_moves(0.17, 0.08) < default_moves
+    assert streamed_moves(0.05, 0.04) > default_moves
+    assert streamed_moves(0.05, 0.01) > default_moves

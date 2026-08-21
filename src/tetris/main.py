@@ -28,6 +28,7 @@ from .game import (
 from .settings import OPTIONS, Settings, cycle, format_value, value_of
 from .state import MAX_NAME, GameState
 from .stats import sidebar_stats
+from .themes import DEFAULT_THEME, THEMES
 
 # Colors: pair index -> piece kind
 COLORS: dict[str, int] = {"I": 1, "O": 2, "T": 3, "S": 4, "Z": 5, "J": 6, "L": 7}
@@ -69,8 +70,10 @@ NEED_H = 27
 # Key handling tuning
 # Tap = one move; holding streams after DAS at the ARR rate (self-driven,
 # not dependent on the terminal's slow initial auto-repeat delay).
-DAS = 0.17           # delay after the first tap before held-key streaming
-ARR = 0.04           # auto-repeat rate (min interval between moves) while held
+# DAS/ARR are the DEFAULTS; the live values come from the settings menu
+# (Settings.das/arr, synced into KeyReader each time the menu changes).
+DAS = 0.17           # default delay after the first tap before held-key streaming
+ARR = 0.04           # default auto-repeat rate (min interval between moves)
 HOLD_WINDOW = 0.06  # a dir-key event within this window counts as "still held"
 ROTATE_COOLDOWN = 0.12
 FRAME = 0.02          # main loop frame time (50 fps)
@@ -96,22 +99,31 @@ ESC_SEQS = {
 }
 
 
-def init_colors() -> None:
+def init_colors(theme: str = "classic") -> None:
+    """(Re)initialize the color pairs.
+
+    Pairs 1-9 come from the named theme (piece cells 1-7, text 8,
+    highlight 9; unknown names fall back to classic) — safe to re-run
+    live when the theme setting changes, as curses allows re-initing a
+    pair (re-run build_attrs() afterwards to refresh cached attrs). The
+    flash pair (10) and the border/background pairs (11/12) are fixed.
+    """
     global BORDER_ATTR
     if not curses.has_colors():
         return
+    t = THEMES.get(theme, THEMES[DEFAULT_THEME])
     curses.start_color()
     pairs = {
-        1: curses.COLOR_CYAN,
-        2: curses.COLOR_YELLOW,
-        3: curses.COLOR_MAGENTA,
-        4: curses.COLOR_GREEN,
-        5: curses.COLOR_RED,
-        6: curses.COLOR_BLUE,
-        7: curses.COLOR_WHITE,
-        8: curses.COLOR_WHITE,   # text
-        9: curses.COLOR_YELLOW,  # highlights
-        10: curses.COLOR_BLACK,  # flash (with white bg)
+        1: t.cells["I"],
+        2: t.cells["O"],
+        3: t.cells["T"],
+        4: t.cells["S"],
+        5: t.cells["Z"],
+        6: t.cells["J"],
+        7: t.cells["L"],
+        8: t.text,
+        9: t.highlight,
+        10: curses.COLOR_BLACK,  # flash (fixed: white on yellow)
     }
     for i, fg in pairs.items():
         if i == 10:
@@ -556,6 +568,8 @@ class KeyReader:
 
     def __init__(self) -> None:
         self.last_rotate = 0.0
+        self.das = DAS  # live-updated from the settings menu (P4)
+        self.arr = ARR
         self._esc_seq: list[int] = []
         self._esc_t = 0.0
         self._dir = 0              # active hold direction (-1/1), 0 = none
@@ -619,9 +633,9 @@ class KeyReader:
             self._dir = d
             self._dir_since = now
         self._last_dir_event = now
-        if now - self._last_move < ARR:
+        if now - self._last_move < self.arr:
             return False  # anti double-fire (e.g. ESC reassembly artifact)
-        if not fresh and now - self._dir_since < DAS:
+        if not fresh and now - self._dir_since < self.das:
             return False  # held, but the DAS delay hasn't elapsed yet
         self._last_move = now
         return True
@@ -635,7 +649,7 @@ class KeyReader:
         """
         if self._dir == 0 or now - self._last_dir_event > HOLD_WINDOW:
             return 0
-        if now - self._dir_since < DAS or now - self._last_move < ARR:
+        if now - self._dir_since < self.das or now - self._last_move < self.arr:
             return 0
         self._last_move = now
         return self._dir
@@ -692,10 +706,10 @@ def game_loop(stdscr: curses.window) -> None:
     # arrow sequence (ESC [ A/B/C) as one key, and the app-level ESC_TTL
     # reassembly remains the fallback for slower terminals.
     curses.set_escdelay(25)
-    init_colors()
+    state = GameState()
+    init_colors(state.settings.theme)
     build_attrs()
 
-    state = GameState()
     t = Tetris(start_level=state.settings.start_level)
     new_best = False
     rank: int | None = None
@@ -833,6 +847,14 @@ def game_loop(stdscr: curses.window) -> None:
                 new_settings = cycle(state.settings, opt.key, d)
                 # Persist immediately through the single state store.
                 state.update_settings(**{opt.key: value_of(new_settings, opt.key)})
+                # Apply the change live: input timing reads the reader's
+                # das/arr, and a theme change re-inits the color pairs and
+                # the cached attrs without a restart.
+                reader.das = state.settings.das
+                reader.arr = state.settings.arr
+                if opt.key == "theme":
+                    init_colors(state.settings.theme)
+                    build_attrs()
         elif menu is None and not t.paused and not t.game_over:
             if key in (curses.KEY_LEFT, curses.KEY_RIGHT):
                 d = -1 if key == curses.KEY_LEFT else 1
