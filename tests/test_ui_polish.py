@@ -25,6 +25,7 @@ so the game_loop-driven tests still collect while ``main.py`` lacks them.
 """
 
 import json
+import random
 import re
 from pathlib import Path
 
@@ -521,3 +522,25 @@ def test_keyreader_honors_custom_das_arr() -> None:
     assert streamed_moves(0.17, 0.08) < default_moves
     assert streamed_moves(0.05, 0.04) > default_moves
     assert streamed_moves(0.05, 0.01) > default_moves
+
+
+def test_game_over_modal_shows_time_and_best_combo() -> None:
+    """P7: the game-over modal reports the game's time (M:SS) and, when
+    any combo occurred, the best combo of the run."""
+    from tetris.engine import Tetris
+    from tetris.main import build_game_over_modal
+
+    t = Tetris(rng=random.Random(7))
+    t.play_time = 225.4  # 3:45
+    t.best_combo = 4
+    m = build_game_over_modal(t, 999, None)
+    assert "Time    3:45" in m.lines
+    assert "Best combo  4" in m.lines
+
+    # A sub-minute game formats as 0:SS, and a combo-free run omits the
+    # best-combo row entirely.
+    t2 = Tetris(rng=random.Random(8))
+    t2.play_time = 59.9
+    m2 = build_game_over_modal(t2, 0, None)
+    assert "Time    0:59" in m2.lines
+    assert not any("combo" in line for line in m2.lines)

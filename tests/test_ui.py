@@ -353,11 +353,11 @@ def test_settings_menu_is_paused(monkeypatch, tmp_path) -> None:
     assert paused_cols == piece_cols(fresh)
 
 
-def test_game_over_uses_modal_without_timer(monkeypatch, tmp_path) -> None:
+def test_game_over_uses_modal_with_time(monkeypatch, tmp_path) -> None:
     """Game over renders as the centered GAME OVER modal (top-10 score on
     a fresh score file, so it offers the name-entry footer: ENTER saves
-    + new game, ESC new game without saving) and no longer shows the
-    elapsed-time line."""
+    + new game, ESC new game without saving) and shows the game's elapsed
+    time (P7). The rigged game instant-ends, so the time is 0:00."""
     monkeypatch.setenv("TETRIS_SCORES", str(tmp_path / "state.json"))
 
     class OverTetris(main.Tetris):
@@ -372,7 +372,7 @@ def test_game_over_uses_modal_without_timer(monkeypatch, tmp_path) -> None:
     assert "GAME OVER" in text
     assert "ENTER save + new game" in text
     assert "ESC  new game, no save" in text
-    assert "Time" not in text
+    assert "Time    0:00" in text
 
 
 def test_ghost_setting_toggles_ghost_piece(monkeypatch, tmp_path) -> None:

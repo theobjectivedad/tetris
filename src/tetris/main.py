@@ -27,7 +27,7 @@ from .game import (
 )
 from .settings import OPTIONS, Settings, cycle, format_value, value_of
 from .state import MAX_NAME, GameState
-from .stats import sidebar_stats
+from .stats import format_time, sidebar_stats
 from .themes import DEFAULT_THEME, THEMES
 
 # Colors: pair index -> piece kind
@@ -287,7 +287,10 @@ def build_game_over_modal(
         f"Score   {t.score:,}",
         f"Lines   {t.lines}    Level {t.level}",
         f"Pieces  {t.pieces}",
+        f"Time    {format_time(t.play_time)}",
     ]
+    if t.best_combo > 0:
+        lines.append(f"Best combo  {t.best_combo}")
     if rank is not None:
         if name_awaiting:
             lines.append(f"ENTER YOUR NAME: {name}█")
@@ -949,17 +952,14 @@ def game_loop(stdscr: curses.window) -> None:
             effects.spin_flash = None
 
         # ---- static-scene skip ---------------------------------------
-        # The board only mutates in _lock/_commit_clears, which always bump
-        # spawn_seq (or flip game_over/frozen), so spawn_seq + piece state
-        # cover every board/queue/ghost change; the rest covers the panels,
+        # t.version (P5) bumps on every observable engine change — moves,
+        # rotations, drops, holds, gravity steps, locks, clears, spawns,
+        # pause flips, and game over — so one counter covers the board,
+        # stats panel, and game-over modal; the rest covers layout,
         # effects, and modals. Any term flipping makes the frame dirty.
         scene: tuple[object, ...] = (
             max_x, max_y,  # resize / layout
-            t.game_over, t.paused, t.frozen,  # mode flips (incl. rank frame)
-            t.spawn_seq,  # every lock / clear / hold / board change
-            (t.piece.x, t.piece.y, t.piece.rot, t.piece.kind),
-            t.holding, t.can_hold,
-            t.score, t.lines, t.level, t.pieces,  # stats panel + game over
+            t.version,  # every engine state change (incl. game_over/paused)
             tuple(
                 (tx, row, int((now - born) * 2.5))
                 for tx, row, born in effects.floaters
@@ -970,6 +970,7 @@ def game_loop(stdscr: curses.window) -> None:
             menu, menu_cursor, typed_name, name_awaiting,  # modal content
             new_best, rank,
             state.settings.ghost, state.settings.hold,
+            state.settings.theme,  # live recolor on switch (P12)
             state.best() if t.game_over else 0,
         )
         if scene == prev_scene and key == -1 and now >= effects.shake_until:

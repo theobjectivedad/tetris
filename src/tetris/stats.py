@@ -34,6 +34,12 @@ def display_value(label: str, value: bool | float) -> str:
     return str(value)
 
 
+def format_time(total_seconds: float) -> str:
+    """M:SS display for the game-over screen (e.g. ``3:45``)."""
+    s = int(total_seconds)
+    return f"{s // 60}:{s % 60:02d}"
+
+
 def sidebar_stats(snapshot: dict[str, int | bool | float]) -> list[tuple[str, str]]:
     """Ordered (label, display-string) pairs for the left stats panel.
 
@@ -45,4 +51,4 @@ def sidebar_stats(snapshot: dict[str, int | bool | float]) -> list[tuple[str, st
     ]
 
 
-__all__ = ["STAT_LABELS", "display_value", "sidebar_stats"]
+__all__ = ["STAT_LABELS", "display_value", "format_time", "sidebar_stats"]
