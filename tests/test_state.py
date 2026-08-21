@@ -170,13 +170,68 @@ def test_settings_round_trip(tmp_path: Path) -> None:
 
 def test_update_settings_clamps_and_coerces(tmp_path: Path) -> None:
     gs = GameState(tmp_path / "state.json")
-    gs.update_settings(start_level=99, sound=1)
+    gs.update_settings(start_level=99, sound="yes")
     assert gs.settings.start_level == MAX_START_LEVEL
-    assert gs.settings.sound is True
+    assert gs.settings.sound is True  # wrong-typed value: current kept
+    gs.update_settings(ghost=False)
     gs.update_settings(start_level=-3, ghost=0)
     assert gs.settings.start_level == 1
-    assert gs.settings.ghost is False  # 0 coerced to bool; field stays a bool
+    assert gs.settings.ghost is False  # wrong-typed: current value kept
     gs.update_settings(bogus=1)  # unknown key: ignored, no raise
+
+
+def test_update_settings_persists_float_and_str(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    gs = GameState(path)
+    gs.update_settings(das=0.25, arr=0.08, theme="mono")
+    assert gs.settings.das == 0.25
+    assert gs.settings.arr == 0.08
+    assert gs.settings.theme == "mono"
+
+    reloaded = GameState(path)
+    assert reloaded.settings.das == 0.25
+    assert reloaded.settings.arr == 0.08
+    assert reloaded.settings.theme == "mono"
+
+
+def test_update_settings_rejects_bad_float_and_str(tmp_path: Path) -> None:
+    gs = GameState(tmp_path / "state.json")
+    gs.update_settings(das="fast")  # str where a float is expected
+    gs.update_settings(das=1)  # int where a float is expected
+    gs.update_settings(das=True)  # bool where a float is expected
+    gs.update_settings(arr=0.5)  # float, but not an allowed value
+    gs.update_settings(theme="neon")  # str, but not an allowed value
+    gs.update_settings(theme=1)  # non-str theme
+    assert gs.settings.das == 0.17
+    assert gs.settings.arr == 0.04
+    assert gs.settings.theme == "classic"
+
+
+def test_new_settings_full_round_trip(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    gs = GameState(path)
+    gs.update_settings(
+        start_level=5,
+        ghost=False,
+        hold=False,
+        sound=True,
+        shake=False,
+        das=0.20,
+        arr=0.02,
+        theme="vivid",
+    )
+
+    reloaded = GameState(path)
+    assert reloaded.settings == Settings(
+        start_level=5,
+        ghost=False,
+        hold=False,
+        sound=True,
+        shake=False,
+        das=0.20,
+        arr=0.02,
+        theme="vivid",
+    )
 
 
 def test_save_writes_unified_format(tmp_path: Path) -> None:
@@ -188,7 +243,16 @@ def test_save_writes_unified_format(tmp_path: Path) -> None:
     assert isinstance(raw, dict)
     assert set(raw) == {"scores", "settings"}
     assert raw["scores"][0]["score"] == 10
-    assert set(raw["settings"]) == {"start_level", "ghost", "hold", "sound", "shake"}
+    assert set(raw["settings"]) == {
+        "start_level",
+        "ghost",
+        "hold",
+        "sound",
+        "shake",
+        "das",
+        "arr",
+        "theme",
+    }
 
 
 def test_legacy_list_file_migrates(tmp_path: Path) -> None:
