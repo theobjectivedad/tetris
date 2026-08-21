@@ -23,7 +23,7 @@ _SNAPSHOT_KEY = {
 }
 
 
-def display_value(label: str, value: int | bool) -> str:
+def display_value(label: str, value: bool | float) -> str:
     """Format a stat value exactly as the stats panel shows it."""
     if label in ("SCORE", "BEST"):
         return f"{int(value):,}"
@@ -34,7 +34,7 @@ def display_value(label: str, value: int | bool) -> str:
     return str(value)
 
 
-def sidebar_stats(snapshot: dict[str, int | bool]) -> list[tuple[str, str]]:
+def sidebar_stats(snapshot: dict[str, int | bool | float]) -> list[tuple[str, str]]:
     """Ordered (label, display-string) pairs for the left stats panel.
 
     ``snapshot`` is ``Tetris.snapshot()``.

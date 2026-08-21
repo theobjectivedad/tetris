@@ -53,10 +53,10 @@ class Tetris:
         start_level: int = 1,
     ) -> None:
         # An injectable RNG keeps the piece bag deterministic and isolated from
-        # global state when provided. When omitted, we fall back to the module
-        # level ``random`` (i.e. global ``random.seed`` still governs) so existing
-        # callers/tests that seed the global RNG keep working unchanged.
-        self._rng = rng
+        # global state when provided. When omitted, a fresh ``random.Random()``
+        # (seeded from os.urandom) is used: every game gets its own private
+        # stream and the global module RNG is never read.
+        self._rng = rng or random.Random()
         self.bag: list[str] = []
         self.board: Board = Board.empty()
         self.score = 0
@@ -64,9 +64,12 @@ class Tetris:
         self.level = max(1, min(MAX_START_LEVEL, start_level))
         self.pieces = 0
         self.combo = 0
+        self.best_combo: int = 0  # highest combo reached this game
         self.b2b = False
         self.game_over = False
-        self.paused = False
+        self._paused = False
+        self.version: int = 0  # bumped on every observable state change
+        self.play_time: float = 0.0  # real seconds played (excl. pause/game over)
         self.drop_interval = max(0.05, 0.5 * (0.8 ** (self.level - 1)))
         self.holding: str | None = None
         self.can_hold = True
@@ -81,7 +84,26 @@ class Tetris:
         self._lock_t = 0.0
         self._resets = 0
         self._last_grav: float | None = None
+        self._last_tick: float | None = None  # last tick() time, for play_time
         self._spin: bool | None = None  # T-spin of the last lock: True=full, False=mini
+
+    # -- pause (version-bumping property) ------------------------------
+
+    @property
+    def paused(self) -> bool:
+        return self._paused
+
+    @paused.setter
+    def paused(self, value: bool) -> None:
+        if value != self._paused:
+            self._paused = value
+            self.version += 1
+
+    def _set_game_over(self) -> None:
+        """Transition to game over, bumping the version once on the flip."""
+        if not self.game_over:
+            self.game_over = True
+            self.version += 1
 
     # -- piece queue -------------------------------------------------
 
@@ -97,10 +119,7 @@ class Tetris:
     def _refill(self) -> str:
         if not self.bag:
             self.bag = list(PIECES.keys())
-            if self._rng is None:
-                random.shuffle(self.bag)
-            else:
-                self._rng.shuffle(self.bag)
+            self._rng.shuffle(self.bag)
         return self.bag.pop()
 
     def _reset_fall_state(self) -> None:
@@ -115,7 +134,7 @@ class Tetris:
         self._reset_fall_state()
         piece = Piece(kind=kind, x=BOARD_W // 2 - 2, y=0)
         if self._collides(piece):
-            self.game_over = True
+            self._set_game_over()
         return piece
 
     # -- collision ---------------------------------------------------
@@ -146,6 +165,7 @@ class Tetris:
         if not self._collides(p):
             self.piece = p
             self._register_shift(now)
+            self.version += 1
             return True
         return False
 
@@ -161,6 +181,7 @@ class Tetris:
             if not self._collides(q, new_rot):
                 self.piece = q
                 self._register_shift(now)
+                self.version += 1
                 return True
         return False
 
@@ -174,6 +195,7 @@ class Tetris:
         if not self._collides(q):
             self.piece = q
             self.score += SOFT_DROP_POINTS
+            self.version += 1
             return True
         return False
 
@@ -188,6 +210,7 @@ class Tetris:
             dist += 1
         self.piece = p
         self.score += HARD_DROP_POINTS * dist
+        self.version += 1
         self._lock()
         return dist
 
@@ -205,7 +228,8 @@ class Tetris:
             self.piece = Piece(held, x=BOARD_W // 2 - 2, y=0)
             self._reset_fall_state()
             if self._collides(self.piece):
-                self.game_over = True
+                self._set_game_over()
+        self.version += 1
         self.can_hold = False
 
     # -- gravity / ticking ---------------------------------------------
@@ -220,10 +244,20 @@ class Tetris:
         return not self._collides(Piece(p.kind, p.x, p.y + 1, p.rot), p.rot)
 
     def tick(self, now: float) -> None:
-        """Advance the simulation at monotonic time ``now``: applies gravity
-        when it is due, and locks a grounded piece once it has rested for
-        LOCK_DELAY seconds (refreshed by move/rotate, capped)."""
-        if self.game_over or self.paused or self.frozen:
+        """Advance the simulation at monotonic time ``now``: accumulates
+        play time, applies gravity when it is due, and locks a grounded
+        piece once it has rested for LOCK_DELAY seconds (refreshed by
+        move/rotate, capped).
+
+        Play time counts real elapsed time while the game is live and not
+        paused (including line-clear flashes); the tick timestamp keeps
+        advancing while paused, so resuming produces no time jump."""
+        if self.game_over:
+            return
+        if self._last_tick is not None and not self._paused:
+            self.play_time += now - self._last_tick
+        self._last_tick = now
+        if self._paused or self.frozen:
             return
         if self._can_fall():
             if self._grounded:
@@ -233,6 +267,7 @@ class Tetris:
                 self._last_grav = now
                 p = self.piece
                 self.piece = Piece(p.kind, p.x, p.y + 1, p.rot)
+                self.version += 1
         else:
             if not self._grounded:
                 self._grounded = True
@@ -284,9 +319,10 @@ class Tetris:
         return bool(corners[front[0]] and corners[front[1]])
 
     def _lock(self) -> None:
+        self.version += 1
         for cx, cy in self.piece.cells():
             if cy < 0:
-                self.game_over = True
+                self._set_game_over()
                 continue
             self.board.set_cell(cx, cy, self.piece.kind)
         self.pieces += 1
@@ -308,6 +344,7 @@ class Tetris:
     def _on_lock_no_clears(self) -> None:
         # Breaking a combo resets it.
         self.combo = 0
+        self.best_combo = max(self.best_combo, self.combo)
         if self._spin is not None:
             full = self._spin
             cx, cy = self.piece.x + 1, self.piece.y + 1
@@ -334,6 +371,7 @@ class Tetris:
         )
         self.spins += bd.spins_delta
         self.combo = bd.combo_after
+        self.best_combo = max(self.best_combo, self.combo)
         self.b2b = bd.b2b_after
         self.score += bd.points
         self.lines += count
@@ -346,6 +384,7 @@ class Tetris:
 
         self.board.collapse()
         self.piece = self._spawn()
+        self.version += 1
 
     def _cleared_rows(self) -> list[int]:
         return self.board.full_rows()
@@ -362,7 +401,7 @@ class Tetris:
     def full_rows(self) -> list[int]:
         return self._cleared_rows()
 
-    def snapshot(self) -> dict[str, int | bool]:
+    def snapshot(self) -> dict[str, int | bool | float]:
         """A machine-readable view of engine-owned state.
 
         Single source of truth for the sidebar stats (see ``tetris.stats``).
@@ -378,6 +417,8 @@ class Tetris:
             "spins": self.spins,
             "paused": self.paused,
             "game_over": self.game_over,
+            "time": self.play_time,
+            "best_combo": self.best_combo,
         }
 
 
