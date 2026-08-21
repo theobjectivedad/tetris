@@ -27,6 +27,7 @@ class Settings:
     das: float = 0.17  # directional auto-shift delay, seconds
     arr: float = 0.04  # auto-repeat rate, seconds per step
     theme: str = "classic"
+    mode: str = "classic"  # game mode: "classic" or "sprint"
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,7 @@ OPTIONS: tuple[Option, ...] = (
     Option("das", "DAS delay", (0.05, 0.10, 0.15, 0.17, 0.20, 0.25, 0.30, 0.40)),
     Option("arr", "ARR rate", (0.01, 0.02, 0.03, 0.04, 0.06, 0.08, 0.10)),
     Option("theme", "theme", ("classic", "mono", "vivid")),
+    Option("mode", "game mode", ("classic", "sprint")),
 )
 
 _OPTIONS_BY_KEY: dict[str, Option] = {opt.key: opt for opt in OPTIONS}

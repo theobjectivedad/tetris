@@ -59,6 +59,51 @@ def test_keeps_top_ten(tmp_path: Path) -> None:
     assert gs.record(5, 0, 1) is None  # below the top 10
 
 
+def test_record_sprint_best(tmp_path: Path) -> None:
+    """P11: sprint best time persists in its own block, lower-is-better,
+    and never touches the score high-score table."""
+    path = tmp_path / "state.json"
+    gs = GameState(path)
+    assert gs.best_sprint_time() is None
+
+    # First clear establishes the best.
+    is_new, best = gs.record_sprint(95.5)
+    assert is_new is True
+    assert best == 95.5
+    assert gs.best_sprint_time() == 95.5
+
+    # A faster time replaces it.
+    is_new, best = gs.record_sprint(80.2)
+    assert is_new is True
+    assert best == 80.2
+
+    # A slower time is rejected (no new best) and does not overwrite.
+    is_new, best = gs.record_sprint(90.0)
+    assert is_new is False
+    assert best == 80.2
+
+    # Sprint recording must not write to the score table.
+    assert gs.entries == []
+
+    # Persisted as its own additive block, round-trips on reload.
+    raw = json.loads(path.read_text())
+    assert isinstance(raw.get("sprint"), dict)
+    assert raw["sprint"]["best_time"] == 80.2
+    reloaded = GameState(path)
+    assert reloaded.best_sprint_time() == 80.2
+
+
+def test_record_sprint_tolerates_corrupt(tmp_path: Path) -> None:
+    """A malformed sprint block is treated as "no best" (tolerant read)."""
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({"scores": [], "settings": {}, "sprint": "bogus"}))
+    gs = GameState(path)
+    assert gs.best_sprint_time() is None
+    is_new, best = gs.record_sprint(60.0)
+    assert is_new is True
+    assert best == 60.0
+
+
 def test_replay_save_and_last(tmp_path: Path) -> None:
     """P9: save_replay appends to replays.json (next to the state file),
     keeps the 5 most recent, and last_replay returns the newest. A
@@ -300,8 +345,9 @@ def test_save_writes_unified_format(tmp_path: Path) -> None:
 
     raw = json.loads(path.read_text())
     assert isinstance(raw, dict)
-    assert set(raw) == {"scores", "settings"}
+    assert set(raw) == {"scores", "settings", "sprint"}
     assert raw["scores"][0]["score"] == 10
+    assert raw["sprint"] == {}  # no sprint played yet: empty block
     assert set(raw["settings"]) == {
         "start_level",
         "ghost",
@@ -311,6 +357,7 @@ def test_save_writes_unified_format(tmp_path: Path) -> None:
         "das",
         "arr",
         "theme",
+        "mode",
     }
 
 

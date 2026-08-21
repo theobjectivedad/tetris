@@ -70,6 +70,7 @@ class GameState:
         self.path = Path(path) if path is not None else default_state_path()
         self.entries: list[dict[str, object]] = []
         self.settings = Settings()
+        self.sprint: dict[str, object] = {}  # {"best_time": float, "date": str}
         self._load(load_legacy)
 
     def _load(self, load_legacy: bool) -> None:
@@ -91,6 +92,9 @@ class GameState:
             raw_settings = data.get("settings")
             if isinstance(raw_settings, dict):
                 self.settings = from_dict(raw_settings)
+            raw_sprint = data.get("sprint")
+            if isinstance(raw_sprint, dict):
+                self.sprint = raw_sprint
         # Any other shape (e.g. a JSON scalar): keep the defaults.
 
     def best(self) -> int:
@@ -101,6 +105,32 @@ class GameState:
         if isinstance(score, int) and not isinstance(score, bool):
             return score
         return 0
+
+    # -- sprint best (P11) ---------------------------------------------
+
+    def best_sprint_time(self) -> float | None:
+        """The best (lowest) sprint clear time in seconds, or None."""
+        value = self.sprint.get("best_time")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+        return None
+
+    def record_sprint(self, time_s: float) -> tuple[bool, float | None]:
+        """Record a sprint clear time (P11); lower is better.
+
+        Returns ``(is_new_best, best_time)``. Sprint times do NOT touch the
+        score high-score table (clean semantics) — the best time is kept in
+        its own additive ``{"sprint": {...}}`` block of the unified file.
+        """
+        current = self.best_sprint_time()
+        is_new_best = current is None or float(time_s) < current
+        if is_new_best:
+            self.sprint = {
+                "best_time": round(float(time_s), 1),
+                "date": time.strftime("%Y-%m-%d %H:%M"),
+            }
+            self.save()
+        return is_new_best, self.best_sprint_time()
 
     def record(
         self,
@@ -178,6 +208,7 @@ class GameState:
         payload = {
             "scores": self.entries,
             "settings": asdict(self.settings),
+            "sprint": self.sprint,
         }
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)

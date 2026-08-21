@@ -51,4 +51,35 @@ def sidebar_stats(snapshot: dict[str, int | bool | float]) -> list[tuple[str, st
     ]
 
 
-__all__ = ["STAT_LABELS", "display_value", "format_time", "sidebar_stats"]
+def panel_stats(
+    snapshot: dict[str, int | bool | float], sprint: bool = False
+) -> list[tuple[str, str]]:
+    """Ordered (label, display-string) pairs for the left stats panel.
+
+    Classic (``sprint=False``) is identical to :func:`sidebar_stats` — the
+    canonical ``STAT_LABELS`` contract the MCP parser relies on is
+    unchanged. In sprint mode the SPINS row is replaced by a ``TIME``
+    countdown (M:SS) driven by the snapshot's ``time_left`` field.
+    """
+    if not sprint:
+        return sidebar_stats(snapshot)
+    pairs: list[tuple[str, str]] = []
+    for label in STAT_LABELS:
+        if label == "SPINS":
+            time_left = snapshot.get("time_left")
+            if isinstance(time_left, (int, float)) and not isinstance(time_left, bool):
+                pairs.append(("TIME", format_time(max(0.0, float(time_left)))))
+            else:
+                pairs.append(("TIME", "0:00"))
+        else:
+            pairs.append((label, display_value(label, snapshot[_SNAPSHOT_KEY[label]])))
+    return pairs
+
+
+__all__ = [
+    "STAT_LABELS",
+    "display_value",
+    "format_time",
+    "panel_stats",
+    "sidebar_stats",
+]

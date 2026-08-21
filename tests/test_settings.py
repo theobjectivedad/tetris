@@ -30,7 +30,7 @@ def test_defaults() -> None:
 
 
 def test_options_shape() -> None:
-    assert len(OPTIONS) == 8
+    assert len(OPTIONS) == 9
     assert [o.key for o in OPTIONS] == [
         "start_level",
         "ghost",
@@ -40,6 +40,7 @@ def test_options_shape() -> None:
         "das",
         "arr",
         "theme",
+        "mode",
     ]
     # Every option key must be a real Settings field.
     for o in OPTIONS:
@@ -163,6 +164,21 @@ def test_cycle_theme_wraps() -> None:
     assert cycle(Settings(theme="mono"), "theme", 1).theme == "vivid"
     assert cycle(Settings(theme="mono"), "theme", -1).theme == "classic"
     assert cycle(Settings(theme="vivid"), "theme", 1).theme == "classic"  # wrap
+
+
+def test_cycle_mode_wraps() -> None:
+    # values: classic, sprint (P11)
+    assert cycle(Settings(mode="classic"), "mode", 1).mode == "sprint"
+    assert cycle(Settings(mode="classic"), "mode", -1).mode == "sprint"  # wrap
+    assert cycle(Settings(mode="sprint"), "mode", 1).mode == "classic"  # wrap
+    assert cycle(Settings(mode="sprint"), "mode", -1).mode == "classic"
+
+
+def test_mode_coercion() -> None:
+    # str option: only allowed values accepted, everything else kept as-is.
+    assert from_dict({"mode": "sprint"}).mode == "sprint"
+    assert from_dict({"mode": "marathon"}).mode == "classic"  # invalid -> default
+    assert from_dict({"mode": 42}).mode == "classic"  # wrong type -> default
 
 
 def test_from_dict_full() -> None:
