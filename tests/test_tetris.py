@@ -21,8 +21,7 @@ from tetris.pieces import MAX_START_LEVEL
 
 @pytest.fixture
 def game_state() -> Tetris:
-    random.seed(42)
-    return Tetris()
+    return Tetris(rng=random.Random(42))
 
 
 def fill_row(t: Tetris, y: int, kind: str = "T") -> None:
@@ -64,13 +63,39 @@ class TestBagRandomizer:
         seq_b = [b._refill() for _ in range(7)]
         assert seq_a == seq_b
 
-    def test_default_rng_tracks_global_seed(self) -> None:
-        # Backward-compat default: the module-level RNG still governs.
+    def test_default_rng_ignores_global_seed(self) -> None:
+        # The default constructor no longer falls back to the global module
+        # RNG: two fresh default-constructed engines draw independent streams
+        # (each from its own os.urandom-seeded Random), so reseeding the
+        # global state cannot reproduce the first engine's stream. Under the
+        # legacy global fallback the two sequences would have been equal.
         random.seed(5)
         seq = [Tetris()._refill() for _ in range(7)]
         random.seed(5)
         seq2 = [Tetris()._refill() for _ in range(7)]
-        assert seq == seq2
+        assert seq != seq2
+
+    def test_default_rng_stays_isolated_from_global_state(self) -> None:
+        # Polluting the global module RNG mid-game must not disturb a
+        # default-constructed engine's private stream (valid bag, no crash).
+        t = Tetris()
+        t.bag = []  # start from a full bag (init already drew 5 for the queue)
+        first_bag = [t._refill() for _ in range(7)]
+        random.seed(99999)
+        next_bag = [t._refill() for _ in range(7)]
+        assert sorted(first_bag) == sorted(PIECES.keys())
+        assert sorted(next_bag) == sorted(PIECES.keys())
+
+    def test_same_seed_gives_identical_first_20_pieces(self) -> None:
+        # Two instances built from the same seed produce the identical first
+        # 20 queued pieces (replay determinism, plan P9a).
+        a = Tetris(rng=random.Random(31337))
+        b = Tetris(rng=random.Random(31337))
+        stream_a = [a._refill() for _ in range(20)]
+        stream_b = [b._refill() for _ in range(20)]
+        assert stream_a == stream_b
+        # 20 draws span at least two full bags: every kind appears.
+        assert sorted(set(stream_a)) == sorted(PIECES.keys())
 
 
 # ---------------------------------------------------------------------------
@@ -850,3 +875,221 @@ class TestNextQueue:
             seq.append(t.next_kind)
             t.hard_drop()
         assert seq == expected
+
+
+# ---------------------------------------------------------------------------
+# Version counter (render-skip)
+# ---------------------------------------------------------------------------
+
+
+class TestVersion:
+    def test_fresh_engine_starts_at_version_zero(self) -> None:
+        assert Tetris().version == 0
+
+    def test_successful_move_bumps_version(self) -> None:
+        t = Tetris()
+        before = t.version
+        assert t.move(-1)
+        assert t.version == before + 1
+
+    def test_failed_move_into_wall_does_not_bump(self) -> None:
+        t = Tetris()
+        t.piece = game.Piece("O", x=0, y=5)
+        before = t.version
+        assert not t.move(-1)  # already against the left wall
+        assert t.version == before
+
+    def test_successful_rotate_bumps_version(self) -> None:
+        t = Tetris()
+        t.piece = game.Piece("T", x=4, y=5)
+        before = t.version
+        assert t.rotate(1)
+        assert t.version == before + 1
+
+    def test_failed_rotate_does_not_bump(self) -> None:
+        t = Tetris()
+        t.piece = game.Piece("T", x=4, y=9)
+        t.board = Board.from_rows([["T"] * BOARD_W for _ in range(BOARD_H)])
+        for x, y in t.piece.cells():
+            t.board[y][x] = ""
+        before = t.version
+        assert not t.rotate(1)
+        assert t.version == before
+
+    def test_successful_soft_drop_bumps_version(self) -> None:
+        t = Tetris()
+        before = t.version
+        assert t.soft_drop()
+        assert t.version == before + 1
+
+    def test_soft_drop_on_floor_does_not_bump(self) -> None:
+        t = Tetris()
+        for _ in range(BOARD_H):
+            t.soft_drop()
+        before = t.version
+        assert not t.soft_drop()
+        assert t.version == before
+
+    def test_hard_drop_bumps_version(self) -> None:
+        t = Tetris()
+        before = t.version
+        assert t.hard_drop() > 0
+        assert t.version > before
+
+    def test_hold_bumps_version_only_when_state_changes(self) -> None:
+        t = Tetris()
+        before = t.version
+        t.hold()
+        assert t.version > before
+        after_first = t.version
+        t.hold()  # second hold is a no-op
+        assert t.version == after_first
+
+    def test_gravity_step_in_tick_bumps_version(self) -> None:
+        t = Tetris()
+        before = t.version
+        y0 = t.piece.y
+        t.tick(1.0)  # first tick: _last_grav is None, so the piece falls
+        assert t.piece.y == y0 + 1
+        assert t.version == before + 1
+
+    def test_tick_while_paused_does_not_bump(self) -> None:
+        t = Tetris()
+        before = t.version
+        t.paused = True  # the pause flip itself bumps exactly once
+        assert t.version == before + 1
+        t.tick(1.0)
+        t.tick(2.0)
+        assert t.version == before + 1
+
+    def test_lock_bumps_version(self) -> None:
+        t = Tetris()
+        t.piece = game.Piece("O", 4, BOARD_H - 2)
+        before = t.version
+        t._lock()
+        assert t.version == before + 1
+
+    def test_commit_clears_bumps_version(self) -> None:
+        t = Tetris()
+        fill_row(t, BOARD_H - 1)
+        t.pending_clears = [BOARD_H - 1]
+        before = t.version
+        t._commit_clears()
+        assert t.version == before + 1
+
+    def test_game_over_bumps_version(self) -> None:
+        t = Tetris()
+        for row in t.board[:4]:
+            row[:] = ["T"] * BOARD_W
+        before = t.version
+        t._spawn()
+        assert t.game_over
+        assert t.version == before + 1
+
+    def test_game_over_bumps_only_once(self) -> None:
+        t = Tetris()
+        for row in t.board[:4]:
+            row[:] = ["T"] * BOARD_W
+        t._spawn()
+        assert t.game_over
+        after_first = t.version
+        t._spawn()  # already over: no further bump
+        assert t.version == after_first
+
+    def test_paused_bumps_only_when_value_changes(self) -> None:
+        t = Tetris()
+        before = t.version
+        assert t.paused is False
+        t.paused = True
+        assert t.version == before + 1
+        t.paused = True  # same value: no bump
+        assert t.version == before + 1
+        t.paused = False
+        assert t.version == before + 2
+        t.paused = False  # same value: no bump
+        assert t.version == before + 2
+
+
+# ---------------------------------------------------------------------------
+# Play time & best combo
+# ---------------------------------------------------------------------------
+
+
+class TestPlayTime:
+    def test_first_tick_primes_without_adding_time(self) -> None:
+        t = Tetris()
+        t.tick(5.0)
+        assert t.play_time == 0.0
+
+    def test_play_time_advances_across_ticks(self) -> None:
+        t = Tetris()
+        t.tick(1.0)
+        t.tick(3.0)
+        assert t.play_time == pytest.approx(2.0)
+
+    def test_pause_adds_no_time_and_resume_has_no_jump(self) -> None:
+        t = Tetris()
+        t.tick(0.0)
+        t.tick(1.0)  # +1.0 s
+        t.paused = True
+        t.tick(6.0)  # 5 s of simulated pause: must not count
+        t.tick(11.0)
+        assert t.play_time == pytest.approx(1.0)
+        t.paused = False
+        t.tick(12.0)  # resume: only the real 1 s elapsed
+        assert t.play_time == pytest.approx(2.0)
+
+    def test_frozen_flash_still_counts_time(self) -> None:
+        t = Tetris()
+        t.tick(0.0)
+        fill_row(t, BOARD_H - 1)
+        t.pending_clears = [BOARD_H - 1]
+        t.flash_frames = FLASH_FRAMES
+        t.tick(10.0)  # frozen: no gravity, but time keeps flowing
+        t.tick(13.0)
+        assert t.play_time == pytest.approx(13.0)
+
+    def test_game_over_stops_time(self) -> None:
+        t = Tetris()
+        t.tick(0.0)
+        t.game_over = True
+        t.tick(50.0)
+        assert t.play_time == 0.0
+
+    def test_snapshot_exposes_time(self) -> None:
+        t = Tetris()
+        t.tick(1.0)
+        t.tick(2.0)
+        snap = t.snapshot()
+        assert snap["time"] == pytest.approx(1.0)
+        assert isinstance(snap["time"], float)
+
+    def test_snapshot_exposes_best_combo(self) -> None:
+        t = Tetris()
+        snap = t.snapshot()
+        assert snap["best_combo"] == 0
+
+    def test_best_combo_tracks_highest_combo(self) -> None:
+        t = Tetris()
+        for _ in range(3):
+            fill_row(t, BOARD_H - 1)
+            t.pending_clears = [BOARD_H - 1]
+            t._commit_clears()
+        assert t.combo == 3
+        assert t.best_combo == 3
+        t._on_lock_no_clears()  # combo breaks
+        assert t.combo == 0
+        assert t.best_combo == 3  # the high water mark is retained
+
+    def test_best_combo_survives_single_clears(self) -> None:
+        t = Tetris()
+        fill_row(t, BOARD_H - 1)
+        t.pending_clears = [BOARD_H - 1]
+        t._commit_clears()
+        assert t.combo == 1
+        assert t.best_combo == 1
+        fill_row(t, BOARD_H - 1)
+        t.pending_clears = [BOARD_H - 1]
+        t._commit_clears()
+        assert t.combo == 2
+        assert t.best_combo == 2

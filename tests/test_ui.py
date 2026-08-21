@@ -15,6 +15,11 @@ from tetris import main
 from tetris.game import Piece
 from tetris.main import BOARD_H
 
+# The unpatched engine class. run_game() swaps in a deterministic subclass so
+# every run starts with the identical piece queue (cross-run comparisons rely
+# on it); tests that monkeypatch main.Tetris themselves are left alone.
+_REAL_TETRIS = main.Tetris
+
 
 class FakeTime:
     def __init__(self) -> None:
@@ -74,7 +79,8 @@ fake_time = FakeTime()
 
 def run_game(events: list[tuple[float, int]], duration: float = 2.0, seed: int = 99) -> FakeScreen:
     """Run game_loop with scripted key events; returns the fake screen.
-    The RNG is seeded so every run starts with the identical piece queue.
+    The engine RNG is seeded (via a deterministic Tetris wrapper below) so
+    every run starts with the identical piece queue.
 
     Two terminating q's are appended at ``duration``: the first closes a
     modal if one is open (Q never quits from inside a modal), the second
@@ -86,6 +92,19 @@ def run_game(events: list[tuple[float, int]], duration: float = 2.0, seed: int =
     scr = FakeScreen(events=events)
     scr.events.append((duration, ord("q")))
     scr.events.append((duration, ord("q")))
+
+    # The engine no longer reads the global module RNG, so wrap Tetris to
+    # inject a fresh RNG seeded with ``seed`` — but only when the test has
+    # not already patched main.Tetris (e.g. with a RiggedTetris).
+    real_tetris = main.Tetris
+    if main.Tetris is _REAL_TETRIS:
+
+        class _DeterministicTetris(_REAL_TETRIS):
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                kwargs.setdefault("rng", random.Random(seed))
+                super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+
+        main.Tetris = _DeterministicTetris  # type: ignore[assignment]
 
     real_time, real_curses = main.time, main.curses
     real_curs_set, real_has_colors, real_beep = (
@@ -104,6 +123,7 @@ def run_game(events: list[tuple[float, int]], duration: float = 2.0, seed: int =
     try:
         main.game_loop(scr)
     finally:
+        main.Tetris = real_tetris
         main.time = real_time
         real_curses.curs_set = real_curs_set
         real_curses.has_colors = real_has_colors

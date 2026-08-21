@@ -25,6 +25,8 @@ def test_snapshot_keys() -> None:
         "spins",
         "paused",
         "game_over",
+        "time",
+        "best_combo",
     }
 
 
