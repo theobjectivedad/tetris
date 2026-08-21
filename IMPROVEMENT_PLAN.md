@@ -417,8 +417,22 @@ Acceptance: no references to `tetris.scores` or `tetris.game` in
       `TIME` panel row (M:SS, blinks ≤30s) via `stats.panel_stats`,
       "SPRINT CLEARED"/"TIME UP" modals, sprint-aware replay. Verified live
       via MCP (TIME countdown, loss modal, empty score table). — 93579d1 + e432667
-- [ ] **P6** Decompose main.py — pending (next)
-- [ ] **P13** Legacy shim cleanup + final README sync — pending (last)
+- [x] **P6** Decompose main.py: split into `ui_input.py` (KeyReader, ESC
+      reassembly, DAS/ARR timing), `ui_render.py` (colors, modals, board/
+      sidebar drawing), and `ui_session.py` (the Session state machine +
+      Effects). main.py shrinks 1338 → 115 lines (entry point + 50 fps frame
+      loop). `main.time`/`main.curses`/`main.Tetris` patching preserved
+      (frame loop reads the clock via main's module-level `time`; `Session`
+      receives `now`); `nonlocal` closures → `Session` methods; rendering
+      moved verbatim. Merged from worktree agent (pi-agent-faf57f85). — adb66fa
+- [x] **P13** Legacy shim cleanup + final README sync: deleted `game.py`
+      facade + `scores.py` shim, pointed all imports at real modules, removed
+      both from `__init__.py`/docstrings; README synced to the final state
+      (new features, controls, project layout, 275-test count, `just` targets,
+      breaking-change note). — 25991d0 + final-sync commit
+
+**All 13 plan items (P1–P13) are complete.** Final gate: `just check` green
+(ruff + mypy --strict, 15 source files), 275 pytest tests passing.
 
 ### Lessons / gotchas discovered
 
