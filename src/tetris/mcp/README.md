@@ -67,8 +67,9 @@ on any checkout (pi spawns the server with the project root as cwd, and
     "tetris": {
       "command": "uvx",
       "args": ["--no-cache", "--from", ".", "tetris-vt-server"],
+      "requestTimeoutMs": 120000,
       "env": {
-        "TETRIS_GAME_DIR": "!!pwd",
+        "TETRIS_GAME_DIR": "!pwd",
         "TETRIS_SCORES": "/tmp/tetris-mcp-scores.json"
       }
     }
@@ -96,24 +97,24 @@ on any checkout (pi spawns the server with the project root as cwd, and
 | ---------------- | ------------------------------------ | ---------------------------------------- |
 | `TETRIS_GAME_DIR`| repo root (auto-detected; **set explicitly for uvx**) | Directory the game is launched in       |
 | `TETRIS_GAME_CMD`| `uv run python -m tetris.main`     | Command that launches the game           |
-| `TETRIS_SCORES`  | `~/.local/share/terminal-tetris/scores.json` | Score file (set a temp path for isolated QA runs) |
+| `TETRIS_SCORES`  | `~/.local/share/terminal-tetris/state.json` | Unified state file (scores + settings; set a temp path for isolated QA runs) |
 
 ## Tools
 
 | Tool             | Description                                                        |
 | ---------------- | ------------------------------------------------------------------ |
 | `tetris_start`   | (Re)start the game in a virtual terminal (`width`/`height`)        |
-| `tetris_key`     | Send a key: `left right up down space escape enter c p q r z` (repeatable)      |
+| `tetris_key`     | Send a key: `left right up down space escape enter c h p q r s z` (repeatable)   |
 | `tetris_wait`    | Wait real seconds; the game keeps running                          |
 | `tetris_screen`  | Screen (or a crop) as numbered text lines; `█` solid, `▒` ghost    |
-| `tetris_stats`   | Parse SCORE/BEST/LINES/LEVEL/COMBO/B2B/SPINS; detect PAUSED / GAME OVER  |
+| `tetris_stats`   | Parse SCORE/LINES/LEVEL/COMBO/B2B/SPINS; detect PAUSED / GAME OVER    |
 | `tetris_state`   | Process running/exited, uptime, terminal size                      |
 | `tetris_stop`    | Stop the game (clean `q` or hard kill)                             |
 
 ## Typical play-test session
 
 ```
-tetris_start(width=60, height=30)                      # min 53x23
+tetris_start(width=60, height=30)                      # min 60x27
 tetris_screen()                      # inspect initial layout
 tetris_key("right", count=3)         # tap right 3 times
 tetris_screen(y0=0, y1=12)           # verify piece moved 3 cells, nothing else
@@ -134,4 +135,4 @@ tetris_stop()
   does the parsing, exactly like a real terminal. The game processes one key
   per 20 ms frame, so send repeated keys with `interval >= 0.05`.
 - **Wide characters are fine** in pyte's mirror; keep the game's 1-col-wide
-  `█` assumption in mind when reasoning about pixel columns (cell pitch = 3).
+  `█` assumption in mind when reasoning about pixel columns (cell pitch = 2).
