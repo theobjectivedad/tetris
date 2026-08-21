@@ -306,6 +306,24 @@ def test_help_modal_closes_on_q_without_quitting(monkeypatch) -> None:
     assert "SETTINGS" not in text
 
 
+def test_x_key_rotates_piece_180(monkeypatch) -> None:
+    """X flips the live piece 180°: a T (nub up) becomes a flat row with
+    the nub below, so the rendered silhouette widens from one column to
+    three. (Rigged Tetris: same first piece for the base and X runs.)"""
+    monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_x180.json")
+
+    class RiggedTetris(main.Tetris):
+        def __init__(self, rng: random.Random | None = None, start_level: int = 1) -> None:
+            super().__init__(rng=rng, start_level=start_level)
+            self.piece = Piece("T", 3, 0)
+
+    monkeypatch.setattr(main, "Tetris", RiggedTetris)
+    base = run_game(events=[], duration=1.0)
+    assert piece_cols(base) == {4}  # T rot 0: top row is the single nub column
+    xrun = run_game(events=[(0.5, ord("x"))], duration=1.0)
+    assert piece_cols(xrun) == {3, 4, 5}  # T rot 2: top row is the 3-wide bar
+
+
 def test_settings_menu_cycles_and_persists(monkeypatch, tmp_path) -> None:
     """s opens SETTINGS; down+right cycles the option and persists the new
     value through the unified state file (scores + settings in one doc)."""

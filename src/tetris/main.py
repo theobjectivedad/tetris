@@ -247,12 +247,13 @@ def build_help_modal() -> Modal:
     lines = [
         "←/→ move        SPACE hard drop",
         "↑ rotate CW     Z rotate CCW",
+        "X rotate 180",
         "↓ soft drop     C hold",
         "P pause         S settings",
         "H scores        ? help",
         "R restart       Q quit",
         "ESC close / pause",
-        "GAME OVER: ENTER save, ESC no save",
+        "GAME OVER: ENTER save, ESC skip",
         separator,
         "SCORING (all points × level):",
         "Single 100    Double 300",
@@ -833,6 +834,8 @@ def game_loop(stdscr: curses.window) -> None:
             engine.hard_drop()
         elif token == "C":
             engine.hold()
+        elif token == "X":
+            engine.rotate_180(at)
         # Unknown tokens (e.g. ones logged by a newer build) are skipped.
 
     def start_replay() -> None:
@@ -1042,6 +1045,10 @@ def game_loop(stdscr: curses.window) -> None:
                 if reader.allow_rotate(now):
                     log_action("Z")
                     t.rotate(-1, now)
+            elif key in (ord("x"), ord("X")):
+                if reader.allow_rotate(now):
+                    log_action("X")
+                    t.rotate_180(now)
             elif key == curses.KEY_DOWN:
                 log_action("S")
                 t.soft_drop()

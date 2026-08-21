@@ -81,5 +81,22 @@ KICKS_I: dict[tuple[int, int], list[tuple[int, int]]] = {
     (3, 2): [(0, 0), (2, 0), (-1, -1), (2, 2), (-1, 2)],
     (2, 1): [(0, 0), (-2, 0), (1, -1), (-2, 2), (1, 2)],
 }
+# 180° rotation kicks for J/L/S/Z/T (I is excluded — its 180° is a no-op).
+# All four transitions (0↔2, 1↔3) share the same offset list; y is positive
+# up, same convention as the tables above.
+KICKS_180_JLSTZ: dict[tuple[int, int], list[tuple[int, int]]] = {
+    (0, 2): [(0, 0), (1, 0), (-1, 0), (0, 1), (1, 1)],
+    (2, 0): [(0, 0), (1, 0), (-1, 0), (0, 1), (1, 1)],
+    (1, 3): [(0, 0), (1, 0), (-1, 0), (0, 1), (1, 1)],
+    (3, 1): [(0, 0), (1, 0), (-1, 0), (0, 1), (1, 1)],
+}
 
-__all__ = ["BOARD_H", "BOARD_W", "KICKS_I", "KICKS_JLSTZ", "MAX_START_LEVEL", "PIECES"]
+__all__ = [
+    "BOARD_H",
+    "BOARD_W",
+    "KICKS_180_JLSTZ",
+    "KICKS_I",
+    "KICKS_JLSTZ",
+    "MAX_START_LEVEL",
+    "PIECES",
+]

@@ -11,7 +11,15 @@ import random
 from dataclasses import dataclass
 
 from .board import Board
-from .pieces import BOARD_H, BOARD_W, KICKS_I, KICKS_JLSTZ, MAX_START_LEVEL, PIECES
+from .pieces import (
+    BOARD_H,
+    BOARD_W,
+    KICKS_180_JLSTZ,
+    KICKS_I,
+    KICKS_JLSTZ,
+    MAX_START_LEVEL,
+    PIECES,
+)
 from .scoring import HARD_DROP_POINTS, SOFT_DROP_POINTS, Scorer
 
 FLASH_FRAMES = 8        # frames a cleared row stays visible
@@ -182,6 +190,24 @@ class Tetris:
                 self.piece = q
                 self._register_shift(now)
                 self.version += 1
+                return True
+        return False
+
+    def rotate_180(self, now: float | None = None) -> bool:
+        """Rotate 180° with guideline kicks. The I piece is excluded (its 180°
+        is a no-op modulo the 4×4 box row), so this always refuses I."""
+        if self.game_over or self.frozen:
+            return False
+        p = self.piece
+        if p.kind == "I":
+            return False
+        new_rot = (p.rot + 2) % 4
+        for dx, dy in KICKS_180_JLSTZ[(p.rot, new_rot)]:
+            q = Piece(p.kind, p.x + dx, p.y - dy, new_rot)  # SRS y is up; ours is down
+            if not self._collides(q, new_rot):
+                self.piece = q
+                self._register_shift(now)   # 180° is a rotate action: refreshes lock delay under LOCK_RESET_MAX
+                self.version += 1           # P5 render-skip counter — REQUIRED or the UI won't redraw
                 return True
         return False
 
