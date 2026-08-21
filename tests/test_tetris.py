@@ -788,7 +788,7 @@ class TestLockDelay:
         t.piece = Piece("T", 4, BOARD_H - 2)
         t.tick(1.0)  # registers as grounded at t=1.0
         assert t.rotate_180(1.4)
-        assert t._resets == 1
+        assert t._lock_resets == 1
         assert t.piece.rot == 2 and t.piece.y == BOARD_H - 3
         t.tick(1.85)  # < 0.5 s since the refresh at 1.4
         assert t.pieces == 0
@@ -1028,7 +1028,7 @@ class TestVersion:
         t = Tetris()
         before = t.version
         y0 = t.piece.y
-        t.tick(1.0)  # first tick: _last_grav is None, so the piece falls
+        t.tick(1.0)  # first tick: no gravity applied yet, so the piece falls
         assert t.piece.y == y0 + 1
         assert t.version == before + 1
 

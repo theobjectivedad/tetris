@@ -46,12 +46,18 @@ class Piece:
 
 @dataclass
 class Event:
-    """A UI effect the game requests: floating score text, corner flash, beeps."""
+    """A UI effect the game requests: floating score text, corner flash, beeps.
+
+    ``kind`` shares its vocabulary with ``scoring.ScoreBreakdown.kind``
+    ("clear" | "tetris" | "tspin" | "tspin-mini") and drives the UI's beeps
+    and the T-spin corner flash; ``row`` is the board row the floating text
+    rises from; ``center`` is the T-spin center (the corner-flash anchor).
+    """
 
     text: str
-    kind: str  # "clear" | "tetris" | "tspin" | "tspin-mini"
-    row: int = 10
-    center: tuple[int, int] | None = None  # T-spin center, for the corner flash
+    kind: str
+    row: int
+    center: tuple[int, int] | None = None
 
 
 class Tetris:
@@ -63,46 +69,62 @@ class Tetris:
         start_level: int = 1,
         sprint: bool = False,
     ) -> None:
-        # An injectable RNG keeps the piece bag deterministic and isolated from
-        # global state when provided. When omitted, a fresh ``random.Random()``
-        # (seeded from os.urandom) is used: every game gets its own private
-        # stream and the global module RNG is never read.
+        # -- randomness and piece supply ---------------------------------
+        # An injectable RNG keeps the piece bag deterministic and isolated
+        # from global state when provided. When omitted, a fresh
+        # ``random.Random()`` (seeded from os.urandom) is used: every game
+        # gets its own private stream and the global module RNG is never
+        # read.
         self._rng = rng or random.Random()
         self.bag: list[str] = []
+        self.queue: list[str] = [self._refill() for _ in range(QUEUE_LEN)]
+
+        # -- board and live piece -----------------------------------------
         self.board: Board = Board.empty()
+        self.holding: str | None = None
+        self.can_hold = True
+        self.spawn_seq = 0  # bumped by _spawn; lets the UI detect spawns
+
+        # -- scoring -------------------------------------------------------
         self.score = 0
         self.lines = 0
         self.level = max(1, min(MAX_START_LEVEL, start_level))
         self.pieces = 0
         self.combo = 0
-        self.best_combo: int = 0  # highest combo reached this game
+        self.best_combo = 0  # highest combo reached this game
         self.b2b = False
-        self.game_over = False
-        # Sprint mode (P11): a 10-line time attack. ``won`` is True only on a
-        # win (lines reached before time up); ``time_left`` counts down and is
-        # None in classic mode.
+        self.spins = 0
+
+        # -- sprint mode (P11) ---------------------------------------------
+        # A 10-line time attack. ``won`` is True only on a win (lines
+        # reached before time up); ``time_left`` counts down and is None in
+        # classic mode.
         self.sprint = sprint
-        self.won: bool = False
+        self.won = False
         self.time_left: float | None = SPRINT_TIME if sprint else None
+
+        # -- lifecycle and transient effects -------------------------------
+        self.game_over = False
         self._paused = False
-        self.version: int = 0  # bumped on every observable state change
-        self.play_time: float = 0.0  # real seconds played (excl. pause/game over)
-        self.drop_interval = max(0.05, 0.5 * (0.8 ** (self.level - 1)))
-        self.holding: str | None = None
-        self.can_hold = True
+        self.version = 0  # bumped on every observable state change
+        self.play_time = 0.0  # real seconds played (excl. pause/game over)
+        self.drop_interval = self._drop_interval_for(self.level)
         self.pending_clears: list[int] = []
         self.flash_frames = 0
-        self.queue: list[str] = [self._refill() for _ in range(QUEUE_LEN)]
-        self.spins = 0
         self.events: list[Event] = []
-        self.spawn_seq: int = 0  # bumped by _spawn; lets the UI detect spawns
-        self.piece = self._spawn()
+
+        # -- private fall/lock timing ---------------------------------------
+        # Declared before the first _spawn so _reset_fall_state only ever
+        # refreshes existing state.
         self._grounded = False
-        self._lock_t = 0.0
-        self._resets = 0
-        self._last_grav: float | None = None
-        self._last_tick: float | None = None  # last tick() time, for play_time
-        self._spin: bool | None = None  # T-spin of the last lock: True=full, False=mini
+        self._lock_since = 0.0  # when the piece started resting (refreshed)
+        self._lock_resets = 0  # lock-timer refreshes used since grounding
+        self._last_gravity_at: float | None = None
+        self._last_tick_at: float | None = None  # last tick() time, for play_time
+        self._pending_spin: bool | None = None  # last lock's T-spin: True=full, False=mini
+
+        # First piece (may flip game_over if it collides on spawn).
+        self.piece = self._spawn()
 
     # -- pause (version-bumping property) ------------------------------
 
@@ -141,8 +163,8 @@ class Tetris:
 
     def _reset_fall_state(self) -> None:
         self._grounded = False
-        self._resets = 0
-        self._last_grav = None
+        self._lock_resets = 0
+        self._last_gravity_at = None
 
     def _spawn(self) -> Piece:
         self.spawn_seq += 1
@@ -170,10 +192,10 @@ class Tetris:
     def _register_shift(self, now: float | None) -> None:
         """A successful move/rotate while grounded refreshes the lock timer
         (up to LOCK_RESET_MAX times — the guideline reset cap)."""
-        if now is None or not self._grounded or self._resets >= LOCK_RESET_MAX:
+        if now is None or not self._grounded or self._lock_resets >= LOCK_RESET_MAX:
             return
-        self._lock_t = now
-        self._resets += 1
+        self._lock_since = now
+        self._lock_resets += 1
 
     def move(self, dx: int, now: float | None = None) -> bool:
         if self.game_over or self.frozen:
@@ -289,39 +311,36 @@ class Tetris:
         advancing while paused, so resuming produces no time jump."""
         if self.game_over:
             return
-        if self._last_tick is not None and not self._paused:
-            self.play_time += now - self._last_tick
+        if self._last_tick_at is not None and not self._paused:
+            self.play_time += now - self._last_tick_at
             if self.sprint and self.time_left is not None:
-                self.time_left -= now - self._last_tick
-        self._last_tick = now
-        # Sprint time-up: a loss (won stays False). Stops the countdown and
-        # the whole game.
-        if (
-            self.sprint
-            and self.time_left is not None
-            and self.time_left <= 0
-            and not self.game_over
-        ):
+                self.time_left -= now - self._last_tick_at
+        self._last_tick_at = now
+        # Sprint time-up: a loss (won stays False). Stops the countdown
+        # and the whole game.
+        if self.sprint and self.time_left is not None and self.time_left <= 0:
             self.time_left = 0.0
-            self.game_over = True
-            self.version += 1
+            self._set_game_over()
             return
         if self._paused or self.frozen:
             return
         if self._can_fall():
             if self._grounded:
                 self._grounded = False
-                self._resets = 0
-            if self._last_grav is None or now - self._last_grav >= self.drop_interval:
-                self._last_grav = now
+                self._lock_resets = 0
+            if (
+                self._last_gravity_at is None
+                or now - self._last_gravity_at >= self.drop_interval
+            ):
+                self._last_gravity_at = now
                 p = self.piece
                 self.piece = Piece(p.kind, p.x, p.y + 1, p.rot)
                 self.version += 1
         else:
             if not self._grounded:
                 self._grounded = True
-                self._lock_t = now
-            elif now - self._lock_t >= LOCK_DELAY:
+                self._lock_since = now
+            elif now - self._lock_since >= LOCK_DELAY:
                 self._lock()
 
     def advance_flash(self) -> bool:
@@ -376,7 +395,7 @@ class Tetris:
             self.board.set_cell(cx, cy, self.piece.kind)
         self.pieces += 1
         self.can_hold = True
-        self._spin = self._detect_spin()
+        self._pending_spin = self._detect_spin()
 
         if self.game_over:
             self.piece = self._spawn()
@@ -394,8 +413,8 @@ class Tetris:
         # Breaking a combo resets it.
         self.combo = 0
         self.best_combo = max(self.best_combo, self.combo)
-        if self._spin is not None:
-            full = self._spin
+        if self._pending_spin is not None:
+            full = self._pending_spin
             cx, cy = self.piece.x + 1, self.piece.y + 1
             bd = Scorer.breakdown(
                 line_count=0, spin=full, combo=self.combo, b2b=self.b2b, level=self.level
@@ -406,14 +425,14 @@ class Tetris:
             self.events.append(
                 Event(text=f"{bd.label} +{bd.points}", kind=bd.kind, row=cy, center=(cx, cy))
             )
-        self._spin = None
+        self._pending_spin = None
 
     def _commit_clears(self) -> None:
         count = len(self.pending_clears)
         rows = self.pending_clears
         self.pending_clears = []
-        spin = self._spin
-        self._spin = None
+        spin = self._pending_spin
+        self._pending_spin = None
 
         bd = Scorer.breakdown(
             line_count=count, spin=spin, combo=self.combo, b2b=self.b2b, level=self.level
@@ -425,7 +444,7 @@ class Tetris:
         self.score += bd.points
         self.lines += count
         self.level = self.lines // 10 + 1
-        self.drop_interval = max(0.05, 0.5 * (0.8 ** (self.level - 1)))
+        self.drop_interval = self._drop_interval_for(self.level)
 
         self.events.append(
             Event(text=f"{bd.label} +{bd.points}", kind=bd.kind, row=rows[-1])
@@ -442,10 +461,13 @@ class Tetris:
         self.piece = self._spawn()
         self.version += 1
 
-    def _cleared_rows(self) -> list[int]:
-        return self.board.full_rows()
-
     # -- helpers ---------------------------------------------------------
+
+    @staticmethod
+    def _drop_interval_for(level: int) -> float:
+        """Gravity interval (seconds) at ``level``: faster each level,
+        floored at 0.05 s."""
+        return max(0.05, 0.5 * (0.8 ** (level - 1)))
 
     def ghost_y(self) -> int:
         p = self.piece
@@ -455,7 +477,8 @@ class Tetris:
         return gy
 
     def full_rows(self) -> list[int]:
-        return self._cleared_rows()
+        """Indices of the completely filled rows (top to bottom)."""
+        return self.board.full_rows()
 
     def snapshot(self) -> dict[str, int | bool | float | None]:
         """A machine-readable view of engine-owned state.
