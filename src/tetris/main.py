@@ -18,6 +18,7 @@ import time
 from typing import cast
 
 from . import __version__
+from .engine import SPRINT_LINES
 from .game import (
     BOARD_H,
     BOARD_W,
@@ -27,7 +28,7 @@ from .game import (
 )
 from .settings import OPTIONS, Settings, cycle, format_value, value_of
 from .state import MAX_NAME, GameState
-from .stats import format_time, sidebar_stats
+from .stats import format_time, panel_stats
 from .themes import DEFAULT_THEME, THEMES
 
 # Colors: pair index -> piece kind
@@ -267,6 +268,32 @@ def build_help_modal() -> Modal:
         f"v{__version__.split('+')[0]}",
     ]
     return Modal("HELP", lines)
+
+
+def build_sprint_modal(
+    t: Tetris, is_new_best: bool, best_time: float | None
+) -> Modal:
+    """The sprint game-over dialog (P11).
+
+    Win -> "SPRINT CLEARED" with the clear time, best time, and score.
+    Loss -> "TIME UP" with the lines reached and score. The best time is
+    the store's best (a win that set a new best shows the flag instead).
+    """
+    if t.won:
+        lines = [f"Time    {format_time(t.play_time)}"]
+        if is_new_best:
+            lines.append("* NEW BEST TIME *")
+        elif best_time is not None:
+            lines.append(f"Best    {format_time(best_time)}")
+        lines += [f"Lines   {t.lines}/{SPRINT_LINES}", f"Score   {t.score:,}"]
+        title = "SPRINT CLEARED"
+    else:
+        lines = [f"Lines   {t.lines}/{SPRINT_LINES}", f"Score   {t.score:,}"]
+        if best_time is not None:
+            lines.append(f"Best    {format_time(best_time)}")
+        title = "TIME UP"
+    lines += ["", "R/ESC new game       Q quit", "G replay last game"]
+    return Modal(title, lines)
 
 
 def build_game_over_modal(
@@ -528,12 +555,16 @@ def draw_stats_panel(stdscr: curses.window, t: Tetris, by: int, x: int, new_best
     color pair 8), starting two rows below the block top, and the
     "★ NEW BEST ★" indicator two rows below the last stat row. The key
     legend and version live in the help modal (`?`) instead."""
-    for i, (label, value) in enumerate(sidebar_stats(t.snapshot())):
+    for i, (label, value) in enumerate(panel_stats(t.snapshot(), sprint=t.sprint)):
+        value_attr = STAT_ATTR
+        # Sprint (P11): blink the countdown once 30 s or less remain.
+        if t.sprint and label == "TIME" and t.time_left is not None and t.time_left <= 30:
+            value_attr = STAT_ATTR | curses.A_BLINK
         try:
             stdscr.addstr(
                 by + 2 + i, x, f"{label:<7}", STAT_ATTR | curses.A_DIM
             )
-            stdscr.addstr(by + 2 + i, x + 7, value, STAT_ATTR)
+            stdscr.addstr(by + 2 + i, x + 7, value, value_attr)
         except curses.error:
             pass
 
@@ -736,9 +767,17 @@ def game_loop(stdscr: curses.window) -> None:
     replay_next = 0
     replay_stop_seq = 0
 
-    t = Tetris(rng=random.Random(seed), start_level=state.settings.start_level)
+    t = Tetris(
+        rng=random.Random(seed),
+        start_level=state.settings.start_level,
+        sprint=state.settings.mode == "sprint",
+    )
     new_best = False
     rank: int | None = None
+    # Sprint bookkeeping (P11): recorded once when a sprint game ends.
+    sprint_handled = False
+    sprint_new_best = False
+    sprint_best: float | None = None
     reader = KeyReader()
     effects = Effects()
     menu: str | None = None  # None | "help" | "settings" | "scores"
@@ -764,6 +803,7 @@ def game_loop(stdscr: curses.window) -> None:
         nonlocal seed, game_start, replay_saved
         nonlocal replay, replay_engine, replay_original
         nonlocal replay_start, replay_next, replay_stop_seq
+        nonlocal sprint_handled, sprint_new_best, sprint_best
         seed = int(time.monotonic() * 1000) % 2**32
         game_start = time.monotonic()
         replay_events.clear()
@@ -774,9 +814,16 @@ def game_loop(stdscr: curses.window) -> None:
         replay_start = 0.0
         replay_next = 0
         replay_stop_seq = 0
-        t = Tetris(rng=random.Random(seed), start_level=state.settings.start_level)
+        t = Tetris(
+            rng=random.Random(seed),
+            start_level=state.settings.start_level,
+            sprint=state.settings.mode == "sprint",
+        )
         new_best = False
         rank = None
+        sprint_handled = False
+        sprint_new_best = False
+        sprint_best = None
         menu = None
         was_paused = False
         anim_start = None
@@ -856,7 +903,11 @@ def game_loop(stdscr: curses.window) -> None:
             return
         replay = data
         replay_original = t
-        replay_engine = Tetris(rng=random.Random(raw_seed), start_level=raw_level)
+        replay_engine = Tetris(
+            rng=random.Random(raw_seed),
+            start_level=raw_level,
+            sprint=bool(data.get("sprint", False)),
+        )
         t = replay_engine
         replay_start = time.monotonic()
         replay_next = 0
@@ -1076,7 +1127,9 @@ def game_loop(stdscr: curses.window) -> None:
         effects.on_events(t.events, now)
 
         # ---- game over ---------------------------------------------------
-        if t.game_over and not new_best and rank is None and t.score > 0:
+        # Classic: a top-10 score enters the high-score table. Sprint never
+        # writes the score table (P11) — its result is a best clear time.
+        if t.game_over and not new_best and rank is None and not t.sprint and t.score > 0:
             rank = state.record(
                 t.score, t.lines, t.level,
                 time_s=t.play_time, best_combo=t.best_combo,
@@ -1084,6 +1137,15 @@ def game_loop(stdscr: curses.window) -> None:
             if rank is not None:
                 new_best = True
                 name_awaiting = True
+
+        # Sprint result (P11): recorded once. A win stores the clear time
+        # (lower is better); a loss just surfaces the existing best.
+        if t.game_over and t.sprint and not sprint_handled:
+            sprint_handled = True
+            if t.won:
+                sprint_new_best, sprint_best = state.record_sprint(t.play_time)
+            else:
+                sprint_best = state.best_sprint_time()
 
         # Replay (P9): save the finished game's input log once, if the
         # player actually played it (at least one authorized action).
@@ -1093,6 +1155,7 @@ def game_loop(stdscr: curses.window) -> None:
                 {
                     "seed": seed,
                     "start_level": state.settings.start_level,
+                    "sprint": t.sprint,
                     "das": state.settings.das,
                     "arr": state.settings.arr,
                     "started_at": game_start,
@@ -1170,6 +1233,10 @@ def game_loop(stdscr: curses.window) -> None:
             new_best, rank,
             state.settings.ghost, state.settings.hold,
             state.settings.theme,  # live recolor on switch (P12)
+            # Sprint countdown (P11): the displayed second changes once per
+            # second even though the engine's version only bumps on
+            # gravity/locks — quantize it so the TIME row stays fresh.
+            int(t.time_left) if (t.sprint and t.time_left is not None) else None,
             state.best() if t.game_over else 0,
         )
         if scene == prev_scene and key == -1 and now >= effects.shake_until:
@@ -1233,14 +1300,22 @@ def game_loop(stdscr: curses.window) -> None:
 
         # ---- modals: game over / help / settings ---------------------
         if t.game_over:
-            draw_modal(
-                stdscr,
-                build_game_over_modal(
-                    t, state.best(), rank, typed_name, name_awaiting, seed
-                ),
-                max_x,
-                max_y,
-            )
+            if t.sprint:
+                draw_modal(
+                    stdscr,
+                    build_sprint_modal(t, sprint_new_best, sprint_best),
+                    max_x,
+                    max_y,
+                )
+            else:
+                draw_modal(
+                    stdscr,
+                    build_game_over_modal(
+                        t, state.best(), rank, typed_name, name_awaiting, seed
+                    ),
+                    max_x,
+                    max_y,
+                )
         elif menu == "help":
             draw_modal(stdscr, build_help_modal(), max_x, max_y)
         elif menu == "settings":

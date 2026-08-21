@@ -27,7 +27,22 @@ def test_snapshot_keys() -> None:
         "game_over",
         "time",
         "best_combo",
+        "sprint",
+        "won",
+        "time_left",
     }
+    # Classic mode: no countdown, not a win.
+    assert snap["sprint"] is False
+    assert snap["won"] is False
+    assert snap["time_left"] is None
+
+
+def test_snapshot_sprint_keys() -> None:
+    """P11: a sprint engine exposes the countdown and win flag."""
+    snap = Tetris(sprint=True).snapshot()
+    assert snap["sprint"] is True
+    assert snap["won"] is False
+    assert snap["time_left"] == 180.0  # SPRINT_TIME
 
 
 def test_display_value_formatting() -> None:

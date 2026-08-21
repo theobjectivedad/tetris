@@ -8,6 +8,8 @@ renderer and the parser can never drift apart.
 
 from __future__ import annotations
 
+from typing import cast
+
 # Canonical stat labels, in panel order. This tuple is the shared contract:
 # main.py renders exactly these, and mcp/server.py looks for exactly these.
 STAT_LABELS = ("SCORE", "LINES", "LEVEL", "COMBO", "B2B", "SPINS")
@@ -40,19 +42,24 @@ def format_time(total_seconds: float) -> str:
     return f"{s // 60}:{s % 60:02d}"
 
 
-def sidebar_stats(snapshot: dict[str, int | bool | float]) -> list[tuple[str, str]]:
+def sidebar_stats(snapshot: dict[str, int | bool | float | None]) -> list[tuple[str, str]]:
     """Ordered (label, display-string) pairs for the left stats panel.
 
-    ``snapshot`` is ``Tetris.snapshot()``.
+    ``snapshot`` is ``Tetris.snapshot()``. The classic labels are always
+    backed by a non-None field (the only None in a snapshot is the
+    sprint-only ``time_left``), so the cast below is sound.
     """
     return [
-        (label, display_value(label, snapshot[_SNAPSHOT_KEY[label]]))
+        (
+            label,
+            display_value(label, cast("bool | float", snapshot[_SNAPSHOT_KEY[label]])),
+        )
         for label in STAT_LABELS
     ]
 
 
 def panel_stats(
-    snapshot: dict[str, int | bool | float], sprint: bool = False
+    snapshot: dict[str, int | bool | float | None], sprint: bool = False
 ) -> list[tuple[str, str]]:
     """Ordered (label, display-string) pairs for the left stats panel.
 
@@ -72,7 +79,9 @@ def panel_stats(
             else:
                 pairs.append(("TIME", "0:00"))
         else:
-            pairs.append((label, display_value(label, snapshot[_SNAPSHOT_KEY[label]])))
+            pairs.append(
+                (label, display_value(label, cast("bool | float", snapshot[_SNAPSHOT_KEY[label]])))
+            )
     return pairs
 
 

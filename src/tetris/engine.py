@@ -18,6 +18,8 @@ FLASH_FRAMES = 8        # frames a cleared row stays visible
 LOCK_DELAY = 0.5        # grace period after landing before the piece locks
 LOCK_RESET_MAX = 15     # move/rotate actions that can refresh the lock timer
 QUEUE_LEN = 5           # pieces visible in the next-piece queue
+SPRINT_LINES = 10       # lines to clear to win a sprint (P11)
+SPRINT_TIME = 180.0     # seconds allotted for a sprint (P11)
 
 
 @dataclass
@@ -51,6 +53,7 @@ class Tetris:
         self,
         rng: random.Random | None = None,
         start_level: int = 1,
+        sprint: bool = False,
     ) -> None:
         # An injectable RNG keeps the piece bag deterministic and isolated from
         # global state when provided. When omitted, a fresh ``random.Random()``
@@ -67,6 +70,12 @@ class Tetris:
         self.best_combo: int = 0  # highest combo reached this game
         self.b2b = False
         self.game_over = False
+        # Sprint mode (P11): a 10-line time attack. ``won`` is True only on a
+        # win (lines reached before time up); ``time_left`` counts down and is
+        # None in classic mode.
+        self.sprint = sprint
+        self.won: bool = False
+        self.time_left: float | None = SPRINT_TIME if sprint else None
         self._paused = False
         self.version: int = 0  # bumped on every observable state change
         self.play_time: float = 0.0  # real seconds played (excl. pause/game over)
@@ -256,7 +265,21 @@ class Tetris:
             return
         if self._last_tick is not None and not self._paused:
             self.play_time += now - self._last_tick
+            if self.sprint and self.time_left is not None:
+                self.time_left -= now - self._last_tick
         self._last_tick = now
+        # Sprint time-up: a loss (won stays False). Stops the countdown and
+        # the whole game.
+        if (
+            self.sprint
+            and self.time_left is not None
+            and self.time_left <= 0
+            and not self.game_over
+        ):
+            self.time_left = 0.0
+            self.game_over = True
+            self.version += 1
+            return
         if self._paused or self.frozen:
             return
         if self._can_fall():
@@ -383,6 +406,13 @@ class Tetris:
         )
 
         self.board.collapse()
+        # Sprint win (P11): reaching the line target completes the run — no
+        # next piece spawns.
+        if self.sprint and self.lines >= SPRINT_LINES and not self.won:
+            self.won = True
+            self.game_over = True
+            self.version += 1
+            return
         self.piece = self._spawn()
         self.version += 1
 
@@ -401,12 +431,13 @@ class Tetris:
     def full_rows(self) -> list[int]:
         return self._cleared_rows()
 
-    def snapshot(self) -> dict[str, int | bool | float]:
+    def snapshot(self) -> dict[str, int | bool | float | None]:
         """A machine-readable view of engine-owned state.
 
         Single source of truth for the sidebar stats (see ``tetris.stats``).
         ``HighScores.best()`` is intentionally excluded — it is not engine
         state and is passed in by the caller that owns the score store.
+        ``time_left`` is None in classic mode (P11 sprint fields).
         """
         return {
             "score": self.score,
@@ -419,6 +450,9 @@ class Tetris:
             "game_over": self.game_over,
             "time": self.play_time,
             "best_combo": self.best_combo,
+            "sprint": self.sprint,
+            "won": self.won,
+            "time_left": self.time_left,
         }
 
 
@@ -426,6 +460,8 @@ __all__ = [
     "FLASH_FRAMES",
     "LOCK_DELAY",
     "LOCK_RESET_MAX",
+    "SPRINT_LINES",
+    "SPRINT_TIME",
     "Event",
     "Piece",
     "Tetris",

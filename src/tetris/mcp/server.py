@@ -342,6 +342,12 @@ def tetris_stats() -> str:
         m = re.search(rf"^\s*{label}\s+(\S+)", text, re.MULTILINE)
         if m:
             result.append(f"{label}={m.group(1)}")
+    # Sprint mode (P11): the panel shows a TIME countdown in place of SPINS.
+    # Additive and case-sensitive — only present when the sprint panel is on
+    # screen, so the classic contract is untouched.
+    m = re.search(r"^\s*TIME\s+(\S+)", text, re.MULTILINE)
+    if m:
+        result.append(f"TIME={m.group(1)}")
     if " PAUSED " in text:
         result.append("PAUSED")
     if "GAME OVER" in text:

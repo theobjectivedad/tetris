@@ -70,8 +70,8 @@ def _over_tetris(monkeypatch, score: int = 5000, once: bool = False) -> None:
     created: list[main.Tetris] = []
 
     class OverTetris(main.Tetris):
-        def __init__(self, rng: random.Random | None = None, start_level: int = 1) -> None:
-            super().__init__(rng=rng, start_level=start_level)
+        def __init__(self, rng: random.Random | None = None, start_level: int = 1, sprint: bool = False) -> None:
+            super().__init__(rng=rng, start_level=start_level, sprint=sprint)
             created.append(self)
             if once and len(created) > 1:
                 return
