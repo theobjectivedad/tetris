@@ -62,6 +62,31 @@ def test_record_stores_name(tmp_path: Path) -> None:
     assert reloaded.entries[0]["name"] == "ADA"
 
 
+def test_record_stores_time_and_best_combo(tmp_path: Path) -> None:
+    """P7c: record() persists the game's time and best combo as additive
+    keys; a legacy entry (no such keys) still loads and sorts fine."""
+    path = tmp_path / "state.json"
+    gs = GameState(path)
+    assert gs.record(300, 3, 1, time_s=125.432, best_combo=4) == 0
+
+    reloaded = GameState(path)
+    entry = reloaded.entries[0]
+    assert entry["time"] == 125.4  # rounded to 1 decimal
+    assert entry["best_combo"] == 4
+
+    # A legacy entry lacking the new keys stays valid (best() reads score).
+    import json
+
+    path.write_text(json.dumps({"scores": [{"score": 999, "level": 2}],
+                                "settings": {}}))
+    legacy = GameState(path)
+    assert legacy.best() == 999
+    assert "time" not in legacy.entries[0]
+    # And a fresh record still appends the new keys alongside legacy ones.
+    legacy.record(10, 1, 1, time_s=5.0, best_combo=0)
+    assert legacy.entries[1]["time"] == 5.0
+
+
 def test_name_capped_at_ten(tmp_path: Path) -> None:
     path = tmp_path / "state.json"
     gs = GameState(path)

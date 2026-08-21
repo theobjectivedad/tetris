@@ -98,9 +98,20 @@ class GameState:
         return 0
 
     def record(
-        self, score: int, lines: int, level: int, name: str = ""
+        self,
+        score: int,
+        lines: int,
+        level: int,
+        name: str = "",
+        *,
+        time_s: float = 0.0,
+        best_combo: int = 0,
     ) -> int | None:
-        """Insert a result; returns its rank (0-based) or None if not top-10."""
+        """Insert a result; returns its rank (0-based) or None if not top-10.
+
+        ``time_s`` (elapsed play seconds) and ``best_combo`` are stored as
+        additive JSON keys; legacy entries without them remain valid.
+        """
         if score <= 0:
             return None
         entry: dict[str, object] = {
@@ -108,6 +119,8 @@ class GameState:
             "score": score,
             "lines": lines,
             "level": level,
+            "time": round(float(time_s), 1),
+            "best_combo": int(best_combo),
             "date": time.strftime("%Y-%m-%d %H:%M"),
         }
         self.entries.append(entry)

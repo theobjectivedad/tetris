@@ -898,7 +898,10 @@ def game_loop(stdscr: curses.window) -> None:
 
         # ---- game over ---------------------------------------------------
         if t.game_over and not new_best and rank is None and t.score > 0:
-            rank = state.record(t.score, t.lines, t.level)
+            rank = state.record(
+                t.score, t.lines, t.level,
+                time_s=t.play_time, best_combo=t.best_combo,
+            )
             if rank is not None:
                 new_best = True
                 name_awaiting = True
