@@ -381,3 +381,51 @@ Acceptance: no references to `tetris.scores` or `tetris.game` in
 - [ ] MCP `KEYS` covers all player keys; full MCP smoke test green
 - [ ] Every feature has engine- or UI-level test coverage
 - [ ] Working tree clean; milestone commits with imperative messages
+
+## Progress log
+
+- [x] **P1** README docs drift fixed (queue 5, top-10, state.json, 195 tests,
+      no time stat, correct layout, full controls table). — merged 02b3965
+- [x] **P10** CI workflow `.github/workflows/ci.yml` (setup-uv@v4, ruff + mypy
+      --strict + pytest). — merged 02b3965
+- [x] **P2** Drift-corrected 50fps frame pacing (`sleep_to_frame`). — merged 6685d35
+- [x] **P12a** Theme data module `themes.py` (classic/mono/vivid). — merged 6758d0b
+- [x] **P8** Settings genericity (generic value_of/cycle/with_value, shared
+      coerce_setting). — merged 5dda86c (208 tests)
+- [x] **P4a** DAS/ARR + theme as settings (values + labels). — merged 5dda86c
+- [x] **P4b/P12b** DAS/ARR + themes wired into main.py (live reader.das/arr,
+      theme-driven init_colors, settings sync on change). — merged 9703051
+- [x] **P5** Engine version counter (every observable mutation bumps `version`).
+      — merged 9703051
+- [x] **P7** Session stats + game time (`play_time`, `best_combo`, `time` on
+      score entries, `best_combo` param on record, TIME in stats panel +
+      game-over modal). — merged 9703051
+- [x] **P9** Replays: per-game seed (P9a RNG made injectable/deterministic),
+      timestamped input log saved to `replays.json` (5 most recent), `G` at
+      game over replays the last saved game at 1× with a `REPLAY` tag, ESC
+      aborts. Verified live via MCP (seed + G hint in modal, replay runs and
+      restores the game-over screen). — merged 61abd53
+- [ ] **P3** 180° rotation (X) — in progress (wave 3 agent)
+- [ ] **P11** Sprint mode — pending (wave 4)
+- [ ] **P6** Decompose main.py — pending (wave 5)
+- [ ] **P13** Legacy shim cleanup — pending (wave 6)
+
+### Lessons / gotchas discovered
+
+- **G vs. name entry:** `g` is a valid high-score name character, so `G`
+  replay must NOT be a shortcut *during* name entry (it would eat the typed
+  letter). G replays only on the settled game-over screen (`not
+  name_awaiting`), and the name-entry modal omits the G hint.
+- **Rigged test Tetris subclasses** must accept the new `rng` kwarg
+  (`main.py` now constructs `Tetris(rng=random.Random(seed), ...)`); all six
+  custom `__init__(self, start_level=...)` overrides were widened to
+  `__init__(self, rng=None, start_level=1)` and pass `rng` through to
+  `super()`.
+- **Replay timestamps are game-relative real time** (`now - game_start`). If
+  the player idles before their first input (common when driving via MCP,
+  where tool-call latency adds ~15-20s), the replay faithfully reproduces
+  that idle (pieces fall by gravity) before the input burst. Correct, not a
+  bug.
+- **MCP `tetris_start` docstring / `KEYS`** must list new keys (`x`, `g`) and
+  the server must be restarted to pick up `KEYS` changes (long-lived uvx
+  process); game-code changes are picked up on the next `tetris_start`.
