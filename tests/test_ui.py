@@ -12,7 +12,7 @@ import re
 from itertools import pairwise
 
 from tetris import main
-from tetris.game import Piece
+from tetris.engine import Piece
 from tetris.main import BOARD_H
 
 # The unpatched engine class. run_game() swaps in a deterministic subclass so

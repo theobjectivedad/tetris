@@ -1,9 +1,14 @@
 """Terminal Tetris.
 
 Submodules:
-    game      — pure game logic facade (fully unit-tested, no I/O)
+    pieces    — SRS piece/kick tables and board dimensions
+    scoring   — scoring rules and constants
+    board     — the grid (board cell storage + line collapse)
+    engine    — pure Tetris engine (no I/O)
     settings  — user settings model (pure data, no I/O)
     state     — unified persistence: high scores + settings in one file
+    stats     — sidebar stat labels/formatting (shared UI + MCP contract)
+    themes    — color-theme definitions (pure data)
     main      — curses UI & input (run with ``python -m tetris.main``)
 """
 

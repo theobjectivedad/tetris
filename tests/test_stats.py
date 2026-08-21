@@ -6,7 +6,7 @@ These pin the shared contract between the renderer (main.py) and the parser
 
 from __future__ import annotations
 
-from tetris.game import Tetris
+from tetris.engine import Tetris
 from tetris.stats import STAT_LABELS, display_value, panel_stats, sidebar_stats
 
 

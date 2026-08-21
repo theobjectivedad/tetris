@@ -14,8 +14,8 @@ from pathlib import Path
 from test_ui import run_game
 
 from tetris import main
-from tetris.engine import SPRINT_LINES, SPRINT_TIME
-from tetris.game import BOARD_H, BOARD_W, Tetris
+from tetris.engine import SPRINT_LINES, SPRINT_TIME, Tetris
+from tetris.pieces import BOARD_H, BOARD_W
 
 
 def fill_row(t: Tetris, y: int, kind: str = "T") -> None:

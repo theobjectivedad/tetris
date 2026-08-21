@@ -1,4 +1,4 @@
-"""Terminal Tetris — curses UI for the game logic in tetris.game.
+"""Terminal Tetris — curses UI for the game logic in tetris.engine.
 
 Layout: three columns centered as one block — the stats panel (left),
 the board (center), and the HOLD/NEXT column (right) — plus centered
@@ -18,14 +18,8 @@ import time
 from typing import cast
 
 from . import __version__
-from .engine import SPRINT_LINES
-from .game import (
-    BOARD_H,
-    BOARD_W,
-    PIECES,
-    Event,
-    Tetris,
-)
+from .engine import SPRINT_LINES, Event, Tetris
+from .pieces import BOARD_H, BOARD_W, PIECES
 from .settings import OPTIONS, Settings, cycle, format_value, value_of
 from .state import MAX_NAME, GameState
 from .stats import format_time, panel_stats

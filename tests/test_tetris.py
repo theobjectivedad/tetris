@@ -1,22 +1,13 @@
-"""Unit tests for the Tetris game logic (tetris.game)."""
+"""Unit tests for the Tetris game logic (tetris.engine)."""
 
 import json
 import random
 
 import pytest
 
-from tetris import game
-from tetris.game import (
-    BOARD_H,
-    BOARD_W,
-    FLASH_FRAMES,
-    LOCK_RESET_MAX,
-    PIECES,
-    Board,
-    HighScores,
-    Tetris,
-)
-from tetris.pieces import MAX_START_LEVEL
+from tetris.engine import FLASH_FRAMES, LOCK_RESET_MAX, Board, Piece, Tetris
+from tetris.pieces import BOARD_H, BOARD_W, MAX_START_LEVEL, PIECES
+from tetris.state import HighScores, default_state_path
 
 
 @pytest.fixture
@@ -146,7 +137,7 @@ class TestMovement:
 
     def test_move_returns_false_when_blocked(self) -> None:
         t = Tetris()
-        t.piece = game.Piece("O", x=0, y=5)
+        t.piece = Piece("O", x=0, y=5)
         assert not t.move(-1)  # already against left wall
 
     def test_move_returns_false_when_frozen(self) -> None:
@@ -213,7 +204,7 @@ class TestPieceRotationData:
 class TestRotation:
     def test_rotate_clockwise_and_counterclockwise_are_inverses(self) -> None:
         t = Tetris()
-        t.piece = game.Piece("T", x=4, y=5)
+        t.piece = Piece("T", x=4, y=5)
         start = (t.piece.x, t.piece.y, t.piece.rot)
         t.rotate(1)
         t.rotate(-1)
@@ -221,7 +212,7 @@ class TestRotation:
 
     def test_full_rotation_cycle_restores_orientation(self) -> None:
         t = Tetris()
-        t.piece = game.Piece("T", x=4, y=5)
+        t.piece = Piece("T", x=4, y=5)
         start = frozenset((x - t.piece.x, y) for x, y in t.piece.cells())
         for _ in range(4):
             t.rotate(1)
@@ -232,7 +223,7 @@ class TestRotation:
         """T piece flat on the floor should kick up when rotating (SRS)."""
         t = Tetris()
         # T rot0 = [(1,0),(0,1),(1,1),(2,1)] → bottom at y+1; place bottom on floor.
-        t.piece = game.Piece("T", x=4, y=BOARD_H - 2)
+        t.piece = Piece("T", x=4, y=BOARD_H - 2)
         assert t.rotate(1)
         assert t.piece.rot == 1
         # The kick must have lifted the piece so all cells fit on the board.
@@ -242,14 +233,14 @@ class TestRotation:
     def test_wall_kick_against_left_wall(self) -> None:
         t = Tetris()
         # I piece (vertical, rot1) jammed against the left wall rotates right.
-        t.piece = game.Piece("I", x=-1, y=5, rot=1)
+        t.piece = Piece("I", x=-1, y=5, rot=1)
         assert t.rotate(1)
         assert all(x >= 0 for x, _ in t.piece.cells())
 
     def test_rotation_impossible_returns_false(self) -> None:
         t = Tetris()
         # Fill the board except the piece's current cells so no kick fits.
-        t.piece = game.Piece("T", x=4, y=9)
+        t.piece = Piece("T", x=4, y=9)
         t.board = Board.from_rows([["T"] * BOARD_W for _ in range(BOARD_H)])
         for x, y in t.piece.cells():
             t.board[y][x] = ""
@@ -257,7 +248,7 @@ class TestRotation:
 
     def test_o_piece_rotation_is_noop_position(self) -> None:
         t = Tetris()
-        t.piece = game.Piece("O", x=4, y=5)
+        t.piece = Piece("O", x=4, y=5)
         x0, y0 = t.piece.x, t.piece.y
         assert t.rotate(1)
         assert (t.piece.x, t.piece.y) == (x0, y0)
@@ -276,7 +267,7 @@ class TestRotate180:
         """In open space the flip is in place: rot 0→2 / 1→3, same x/y,
         no collision, and the version counter bumps for the UI redraw."""
         t = Tetris()
-        t.piece = game.Piece(kind, x=4, y=5, rot=rot)
+        t.piece = Piece(kind, x=4, y=5, rot=rot)
         before = t.version
         assert t.rotate_180()
         assert t.piece.rot == rot + 2
@@ -288,7 +279,7 @@ class TestRotate180:
         """The I piece's 180° is a no-op modulo the 4×4 box row, so it is
         always refused and leaves the piece untouched."""
         t = Tetris()
-        t.piece = game.Piece("I", x=3, y=5, rot=0)
+        t.piece = Piece("I", x=3, y=5, rot=0)
         before = t.version
         assert not t.rotate_180()
         assert (t.piece.x, t.piece.y, t.piece.rot) == (3, 5, 0)
@@ -299,7 +290,7 @@ class TestRotate180:
         the (1,0) kick fits: the piece lands one cell to the right."""
         t = Tetris()
         # T rot 0 at (4, 10): flipped in place its nub would land on (5, 12).
-        t.piece = game.Piece("T", x=4, y=10)
+        t.piece = Piece("T", x=4, y=10)
         t.board[12][5] = "O"
         assert t.rotate_180()
         assert t.piece.rot == 2
@@ -310,7 +301,7 @@ class TestRotate180:
         """With (0,0), (1,0) and (-1,0) all blocked the (0,1) kick lifts
         the piece one row (SRS y-up): same x, one row higher up."""
         t = Tetris()
-        t.piece = game.Piece("T", x=4, y=10)
+        t.piece = Piece("T", x=4, y=10)
         t.board[12][5] = "O"  # blocks the straight flip (nub below)
         t.board[11][7] = "O"  # blocks the (1,0) kick
         t.board[11][3] = "O"  # blocks the (-1,0) kick
@@ -383,8 +374,8 @@ class TestDropping:
     def test_ghost_y_rests_on_floor_or_stack(self, game_state: Tetris) -> None:
         gy = game_state.ghost_y()
         p = game_state.piece
-        ghost = game.Piece(p.kind, p.x, gy, p.rot)
-        below = game.Piece(p.kind, p.x, gy + 1, p.rot)
+        ghost = Piece(p.kind, p.x, gy, p.rot)
+        below = Piece(p.kind, p.x, gy + 1, p.rot)
         assert not game_state._collides(ghost, p.rot)
         assert game_state._collides(below, p.rot)
 
@@ -490,7 +481,7 @@ class TestLineClearing:
             pass
         # Position piece so its lock completes the row: simpler — fill row,
         # clear piece cells, then lock.
-        t.piece = game.Piece("O", x=4, y=BOARD_H - 2)
+        t.piece = Piece("O", x=4, y=BOARD_H - 2)
         t.board = Board.from_rows([["T"] * BOARD_W for _ in range(BOARD_H)])
         for x, y in t.piece.cells():
             t.board[y][x] = ""
@@ -652,16 +643,16 @@ class TestCollision:
     def test_collision_with_stack(self) -> None:
         t = Tetris()
         t.board[BOARD_H - 2][5] = "T"
-        p = game.Piece("O", x=4, y=BOARD_H - 2)
+        p = Piece("O", x=4, y=BOARD_H - 2)
         assert t._collides(p)
 
     def test_no_collision_in_empty_space(self) -> None:
         t = Tetris()
-        assert not t._collides(game.Piece("O", x=3, y=3))
+        assert not t._collides(Piece("O", x=3, y=3))
 
     def test_collision_out_of_bounds(self) -> None:
         t = Tetris()
-        assert t._collides(game.Piece("O", x=BOARD_W - 1, y=3))
+        assert t._collides(Piece("O", x=BOARD_W - 1, y=3))
 
 
 # ---------------------------------------------------------------------------
@@ -679,7 +670,7 @@ class TestGameOver:
 
     def test_game_over_when_locked_above_board(self) -> None:
         t = Tetris()
-        t.piece = game.Piece("O", x=2, y=-1)
+        t.piece = Piece("O", x=2, y=-1)
         t._lock()
         assert t.game_over
 
@@ -743,7 +734,7 @@ class TestHighScores:
 
     def test_env_override(self, tmp_path, monkeypatch) -> None:
         monkeypatch.setenv("TETRIS_SCORES", str(tmp_path / "alt.json"))
-        path = game.default_scores_path()
+        path = default_state_path()
         assert path == tmp_path / "alt.json"
 
 
@@ -754,9 +745,9 @@ class TestHighScores:
 
 class TestLockDelay:
     @staticmethod
-    def _grounded() -> tuple[Tetris, "game.Piece"]:
+    def _grounded() -> tuple[Tetris, "Piece"]:
         t = Tetris()
-        t.piece = game.Piece("O", 4, BOARD_H - 2)  # resting on the floor
+        t.piece = Piece("O", 4, BOARD_H - 2)  # resting on the floor
         t.tick(1.0)  # registers as grounded at t=1.0
         return t, t.piece
 
@@ -794,7 +785,7 @@ class TestLockDelay:
         # T resting on the floor: the in-place flip would poke below the
         # floor, so the (0,1) kick lifts it a row — a rotate action that
         # must refresh the lock timer like any other rotate.
-        t.piece = game.Piece("T", 4, BOARD_H - 2)
+        t.piece = Piece("T", 4, BOARD_H - 2)
         t.tick(1.0)  # registers as grounded at t=1.0
         assert t.rotate_180(1.4)
         assert t._resets == 1
@@ -837,7 +828,7 @@ def _tspin_setup(t: Tetris, top_left: bool, top_right: bool, complete: bool) -> 
         r18[x] = "J"
     for x in (3, 4, 5):
         r19[x] = "J"
-    t.piece = game.Piece("T", 3, 17)
+    t.piece = Piece("T", 3, 17)
 
 
 class TestTSpin:
@@ -890,7 +881,7 @@ class TestTSpin:
             r17[x] = "J"
         for x in range(BOARD_W):  # fully solid: blocks the T under its bottom row
             r18[x] = "J"
-        t.piece = game.Piece("T", 3, 16)
+        t.piece = Piece("T", 3, 16)
         self._play(t)
         assert t.score == 1200
         assert t.b2b
@@ -902,7 +893,7 @@ class TestTSpin:
             t.board[19][x] = "J"
         t.board[17][3] = t.board[17][5] = "J"
         t.board[18][3] = t.board[18][5] = "J"
-        t.piece = game.Piece("O", 4, 18)
+        t.piece = Piece("O", 4, 18)
         t.hard_drop()
         assert t.spins == 0
         assert all(ev.kind != "tspin" for ev in t.events)
@@ -965,21 +956,21 @@ class TestVersion:
 
     def test_failed_move_into_wall_does_not_bump(self) -> None:
         t = Tetris()
-        t.piece = game.Piece("O", x=0, y=5)
+        t.piece = Piece("O", x=0, y=5)
         before = t.version
         assert not t.move(-1)  # already against the left wall
         assert t.version == before
 
     def test_successful_rotate_bumps_version(self) -> None:
         t = Tetris()
-        t.piece = game.Piece("T", x=4, y=5)
+        t.piece = Piece("T", x=4, y=5)
         before = t.version
         assert t.rotate(1)
         assert t.version == before + 1
 
     def test_failed_rotate_does_not_bump(self) -> None:
         t = Tetris()
-        t.piece = game.Piece("T", x=4, y=9)
+        t.piece = Piece("T", x=4, y=9)
         t.board = Board.from_rows([["T"] * BOARD_W for _ in range(BOARD_H)])
         for x, y in t.piece.cells():
             t.board[y][x] = ""
@@ -989,14 +980,14 @@ class TestVersion:
 
     def test_successful_rotate_180_bumps_version(self) -> None:
         t = Tetris()
-        t.piece = game.Piece("T", x=4, y=5)
+        t.piece = Piece("T", x=4, y=5)
         before = t.version
         assert t.rotate_180()
         assert t.version == before + 1
 
     def test_failed_rotate_180_does_not_bump(self) -> None:
         t = Tetris()
-        t.piece = game.Piece("T", x=4, y=9)
+        t.piece = Piece("T", x=4, y=9)
         t.board = Board.from_rows([["T"] * BOARD_W for _ in range(BOARD_H)])
         for x, y in t.piece.cells():
             t.board[y][x] = ""
@@ -1052,7 +1043,7 @@ class TestVersion:
 
     def test_lock_bumps_version(self) -> None:
         t = Tetris()
-        t.piece = game.Piece("O", 4, BOARD_H - 2)
+        t.piece = Piece("O", 4, BOARD_H - 2)
         before = t.version
         t._lock()
         assert t.version == before + 1

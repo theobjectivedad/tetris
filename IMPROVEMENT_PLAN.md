@@ -405,10 +405,20 @@ Acceptance: no references to `tetris.scores` or `tetris.game` in
       game over replays the last saved game at 1× with a `REPLAY` tag, ESC
       aborts. Verified live via MCP (seed + G hint in modal, replay runs and
       restores the game-over screen). — merged 61abd53
-- [ ] **P3** 180° rotation (X) — in progress (wave 3 agent)
-- [ ] **P11** Sprint mode — pending (wave 4)
-- [ ] **P6** Decompose main.py — pending (wave 5)
-- [ ] **P13** Legacy shim cleanup — pending (wave 6)
+- [x] **P3** 180° rotation (X) for J/L/S/Z/T: `KICKS_180_JLSTZ` table,
+      `Tetris.rotate_180` (I refused, SRS y-up kicks, lock-delay refresh,
+      version bump), X key under the shared rotate cooldown, `X` replay
+      token, help-modal + MCP docstring rows. 17 new tests. Merged from
+      worktree agent (branch pi-agent-f03620b8); post-merge fix widened the
+      P3 UI test rig to accept the `sprint` kwarg. — merged 37ba52b
+- [x] **P11** Sprint mode (10-line, 180s time attack): `mode` setting,
+      `record_sprint`/`best_sprint_time` persistence (never touches the score
+      table), engine countdown/win/loss + `time_left`/`won` in snapshot,
+      `TIME` panel row (M:SS, blinks ≤30s) via `stats.panel_stats`,
+      "SPRINT CLEARED"/"TIME UP" modals, sprint-aware replay. Verified live
+      via MCP (TIME countdown, loss modal, empty score table). — 93579d1 + e432667
+- [ ] **P6** Decompose main.py — pending (next)
+- [ ] **P13** Legacy shim cleanup + final README sync — pending (last)
 
 ### Lessons / gotchas discovered
 
