@@ -1093,3 +1093,72 @@ class TestPlayTime:
         t._commit_clears()
         assert t.combo == 2
         assert t.best_combo == 2
+
+
+# ---------------------------------------------------------------------------
+# Replay determinism (P9)
+# ---------------------------------------------------------------------------
+
+def _replay_run(seed: int, events: list[tuple[float, str]], frames: int = 500) -> tuple:
+    """Re-run a recorded (game-relative time, token) input log against a
+    fresh engine with the given seed, mirroring the UI's replay_step:
+    tick on a fixed 20 ms frame grid, feed each event when its time has
+    elapsed, and advance line-clear flashes. Returns a hashable summary
+    of the final state so two runs can be compared for exact equality."""
+    g = Tetris(rng=random.Random(seed))
+    idx = 0
+    dt = 0.02
+    for frame in range(frames):
+        now = frame * dt
+        while idx < len(events) and events[idx][0] <= now:
+            token = events[idx][1]
+            if token == "L":
+                g.move(-1, now)
+            elif token == "R":
+                g.move(1, now)
+            elif token == "U":
+                g.rotate(1, now)
+            elif token == "Z":
+                g.rotate(-1, now)
+            elif token == "S":
+                g.soft_drop()
+            elif token == "H":
+                g.hard_drop()
+            elif token == "C":
+                g.hold()
+            idx += 1
+        g.tick(now)
+        if g.frozen:
+            g.advance_flash()
+        if g.game_over:
+            break
+    board = tuple(tuple(row) for row in g.board)
+    return (g.score, g.lines, g.level, g.pieces, g.combo, g.b2b,
+            g.spins, board, tuple(g.queue), g.spawn_seq)
+
+
+def test_replay_round_trip_is_deterministic() -> None:
+    """The same (seed, input log) re-run produces a bit-identical game:
+    this is what makes G-replay render the exact run the player played."""
+    seed = 31337
+    events: list[tuple[float, str]] = []
+    # A fixed, varied input log: moves, both rotations, soft/hard drops,
+    # and holds, spread over ~10 s so several pieces lock and clear.
+    script = [
+        (0.10, "R"), (0.30, "U"), (0.45, "R"), (0.60, "H"),
+        (0.80, "L"), (1.00, "S"), (1.20, "C"), (1.40, "Z"), (1.60, "H"),
+        (2.00, "L"), (2.20, "L"), (2.40, "U"), (2.60, "H"),
+        (3.00, "R"), (3.20, "R"), (3.40, "Z"), (3.60, "H"),
+        (4.00, "C"), (4.40, "U"), (4.60, "R"), (4.80, "H"),
+        (5.20, "L"), (5.40, "S"), (5.60, "S"), (5.80, "H"),
+        (6.20, "R"), (6.40, "U"), (6.60, "U"), (6.80, "H"),
+        (7.20, "C"), (7.60, "L"), (7.80, "H"), (8.20, "R"), (8.40, "H"),
+    ]
+    events.extend(script)
+    a = _replay_run(seed, events)
+    b = _replay_run(seed, events)
+    assert a == b, "same seed + same input log must produce identical games"
+    # A different seed perturbs the piece bag, so the runs diverge (guards
+    # against a tautological no-op run where the seed is ignored).
+    c = _replay_run(seed + 1, events)
+    assert a != c, "different seeds must produce different games"

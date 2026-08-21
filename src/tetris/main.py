@@ -275,6 +275,7 @@ def build_game_over_modal(
     rank: int | None,
     name: str = "",
     name_awaiting: bool = False,
+    seed: int | None = None,
 ) -> Modal:
     """The game-over dialog, shown as a modal instead of inside the board.
 
@@ -282,6 +283,9 @@ def build_game_over_modal(
     ``name_awaiting`` the player is still typing their name (the block
     cursor marks the input position); Enter saves the name and starts a
     new game, Escape starts a new game without saving.
+
+    ``seed`` (P9): the game's RNG seed — with the saved input log it makes
+    the run replayable (G re-plays the last game).
     """
     lines = [
         f"Score   {t.score:,}",
@@ -300,7 +304,11 @@ def build_game_over_modal(
             lines.append("★ New high score ★")
     else:
         lines.append(f"Best:   {best:,}")
+    if seed is not None:
+        lines.append(f"Seed: {seed}")
     if name_awaiting:
+        # During name entry G is a typed name character (like any letter),
+        # so replay is offered only on the settled game-over screen.
         lines += [
             "",
             "ENTER save + new game",
@@ -308,7 +316,7 @@ def build_game_over_modal(
             "Q quit",
         ]
     else:
-        lines += ["", "R/ESC new game       Q quit"]
+        lines += ["", "R/ESC new game       Q quit", "G replay last game"]
     return Modal("GAME OVER", lines)
 
 
@@ -713,7 +721,22 @@ def game_loop(stdscr: curses.window) -> None:
     init_colors(state.settings.theme)
     build_attrs()
 
-    t = Tetris(start_level=state.settings.start_level)
+    # Replay (P9): the engine is fully deterministic given (seed, actions,
+    # times), so each game gets a seed, and every accepted player action
+    # is logged with its game-relative time. G at game over re-plays the
+    # last saved replay at 1× speed.
+    seed = int(time.monotonic() * 1000) % 2**32
+    game_start = time.monotonic()
+    replay_events: list[tuple[float, str]] = []
+    replay_saved = False
+    replay: dict[str, object] | None = None
+    replay_engine: Tetris | None = None
+    replay_original: Tetris | None = None
+    replay_start = 0.0
+    replay_next = 0
+    replay_stop_seq = 0
+
+    t = Tetris(rng=random.Random(seed), start_level=state.settings.start_level)
     new_best = False
     rank: int | None = None
     reader = KeyReader()
@@ -738,7 +761,20 @@ def game_loop(stdscr: curses.window) -> None:
     def reset_game() -> None:
         nonlocal t, new_best, rank, menu, was_paused, anim_start, last_seq
         nonlocal name_awaiting, typed_name, prev_scene
-        t = Tetris(start_level=state.settings.start_level)
+        nonlocal seed, game_start, replay_saved
+        nonlocal replay, replay_engine, replay_original
+        nonlocal replay_start, replay_next, replay_stop_seq
+        seed = int(time.monotonic() * 1000) % 2**32
+        game_start = time.monotonic()
+        replay_events.clear()
+        replay_saved = False
+        replay = None
+        replay_engine = None
+        replay_original = None
+        replay_start = 0.0
+        replay_next = 0
+        replay_stop_seq = 0
+        t = Tetris(rng=random.Random(seed), start_level=state.settings.start_level)
         new_best = False
         rank = None
         menu = None
@@ -773,6 +809,129 @@ def game_loop(stdscr: curses.window) -> None:
             state.set_entry_name(rank, typed_name)
         name_awaiting = False
 
+    def log_action(token: str) -> None:
+        """Record a player action for the current game's replay (P9):
+        the token at this frame's game-relative time. Attempts are logged
+        when the UI authorizes them (throttle passed) — the engine may
+        still reject a move, which replays identically."""
+        replay_events.append((now - game_start, token))
+
+    def apply_replay_token(engine: Tetris, token: str, at: float) -> None:
+        """Re-run one logged action on the replay engine at its original
+        game-relative time (P9)."""
+        if token == "L":
+            engine.move(-1, at)
+        elif token == "R":
+            engine.move(1, at)
+        elif token == "U":
+            engine.rotate(1, at)
+        elif token == "Z":
+            engine.rotate(-1, at)
+        elif token == "S":
+            engine.soft_drop()
+        elif token == "H":
+            engine.hard_drop()
+        elif token == "C":
+            engine.hold()
+        # Unknown tokens (e.g. ones logged by a newer build) are skipped.
+
+    def start_replay() -> None:
+        """G at game over: re-run the most recent saved replay (P9).
+
+        A fresh engine gets the original seed/start level; the logged
+        events are re-fed at their original game-relative timestamps
+        (1× real time). ``t`` is swapped to the replay engine so the
+        normal draw path renders the replay; the original game-over
+        engine is restored when the replay ends or is aborted (ESC).
+        """
+        nonlocal t, replay, replay_engine, replay_original
+        nonlocal replay_start, replay_next, replay_stop_seq
+        nonlocal anim_start, last_seq, prev_scene
+        data = state.last_replay()
+        if data is None:
+            return
+        raw_seed = data.get("seed")
+        raw_level = data.get("start_level")
+        if not isinstance(raw_seed, int) or not isinstance(raw_level, int):
+            return
+        replay = data
+        replay_original = t
+        replay_engine = Tetris(rng=random.Random(raw_seed), start_level=raw_level)
+        t = replay_engine
+        replay_start = time.monotonic()
+        replay_next = 0
+        replay_stop_seq = 0
+        # The replay must use the original game's input timing, and must
+        # not inherit a held key or a rotate cooldown from the live game.
+        raw_das = data.get("das")
+        raw_arr = data.get("arr")
+        if isinstance(raw_das, (int, float)) and not isinstance(raw_das, bool):
+            reader.das = float(raw_das)
+        if isinstance(raw_arr, (int, float)) and not isinstance(raw_arr, bool):
+            reader.arr = float(raw_arr)
+        reader.reset()
+        effects.clear()
+        anim_start = None
+        last_seq = 0  # the replay's first piece glides in too
+        prev_scene = None  # force a full redraw onto the replay board
+
+    def finish_replay() -> None:
+        """End a replay (completed or aborted) and restore the original
+        game-over screen (P9)."""
+        nonlocal t, replay, replay_engine, replay_original
+        nonlocal replay_next, replay_stop_seq, anim_start, last_seq, prev_scene
+        if replay_original is not None:
+            t = replay_original
+        replay = None
+        replay_engine = None
+        replay_original = None
+        replay_next = 0
+        replay_stop_seq = 0
+        reader.das = state.settings.das
+        reader.arr = state.settings.arr
+        reader.reset()
+        effects.clear()
+        anim_start = None
+        last_seq = t.spawn_seq  # no glide: the final piece is already placed
+        prev_scene = None  # force a redraw of the original game-over screen
+
+    def replay_step(now: float) -> None:
+        """One frame of the replay: feed every logged event whose
+        game-relative time has elapsed, tick the engine, and finish when
+        the run is done (P9)."""
+        nonlocal replay_next, replay_stop_seq
+        events = replay.get("events") if replay is not None else None
+        if not isinstance(events, list) or replay_engine is None:
+            finish_replay()
+            return
+        elapsed = now - replay_start
+        while replay_next < len(events):
+            ev = events[replay_next]
+            if (
+                not isinstance(ev, list)
+                or len(ev) != 2
+                or not isinstance(ev[0], (int, float))
+                or isinstance(ev[0], bool)
+                or not isinstance(ev[1], str)
+            ):
+                replay_next += 1  # skip a malformed entry
+                continue
+            if ev[0] > elapsed:
+                break
+            replay_next += 1
+            apply_replay_token(replay_engine, ev[1], float(ev[0]))
+        replay_engine.tick(elapsed)
+        if replay_engine.frozen:
+            replay_engine.advance_flash()
+        # Finish: the run ended in game over, or all events are fed and
+        # the piece produced by the last input has locked (a new piece —
+        # the final board — has spawned).
+        if replay_next >= len(events):
+            if replay_stop_seq == 0:
+                replay_stop_seq = replay_engine.spawn_seq
+            if replay_engine.game_over or replay_engine.spawn_seq > replay_stop_seq:
+                finish_replay()
+
     def sleep_to_frame() -> None:
         """Sleep the remainder of the 50 fps frame budget.
 
@@ -789,6 +948,14 @@ def game_loop(stdscr: curses.window) -> None:
 
         # ---- input -------------------------------------------------
         key = reader.next_key(stdscr, now)
+
+        # Replay (P9): while a replay is running only ESC is meaningful —
+        # abort back to the game-over screen. All other keys are consumed
+        # so no live-game input can leak into the replayed run.
+        if replay_engine is not None:
+            if key in (27, KEY_ESCAPE):
+                finish_replay()
+            key = -1
 
         # High-score name entry (game over, top-10): edit the typed name.
         # Enter commits and starts a new game (Enter arrives as 10 in most
@@ -812,6 +979,8 @@ def game_loop(stdscr: curses.window) -> None:
                 break
         elif key in (ord("r"), ord("R")) and (t.game_over or t.paused):
             reset_game()
+        elif key in (ord("g"), ord("G")) and t.game_over and not name_awaiting:
+            start_replay()
         elif key in (27, KEY_ESCAPE):
             # Escape is the "back" key: at game over it starts a new game
             # without saving the score (any recorded entry is discarded);
@@ -863,19 +1032,25 @@ def game_loop(stdscr: curses.window) -> None:
                 d = -1 if key == curses.KEY_LEFT else 1
                 # One move per fresh press; holding streams at ARR after DAS.
                 if reader.on_direction(d, now):
+                    log_action("L" if d < 0 else "R")
                     t.move(d, now)
             elif key == curses.KEY_UP:
                 if reader.allow_rotate(now):
+                    log_action("U")
                     t.rotate(1, now)
             elif key in (ord("z"), ord("Z")):
                 if reader.allow_rotate(now):
+                    log_action("Z")
                     t.rotate(-1, now)
             elif key == curses.KEY_DOWN:
+                log_action("S")
                 t.soft_drop()
             elif key == ord(" "):
+                log_action("H")
                 if t.hard_drop() > 0 and state.settings.shake:
                     effects.shake_until = now + 0.12
             elif key in (ord("c"), ord("C")):
+                log_action("C")
                 if state.settings.hold:
                     t.hold()
 
@@ -883,14 +1058,18 @@ def game_loop(stdscr: curses.window) -> None:
         if menu is None and not t.paused and not t.game_over:
             auto = reader.auto_direction(now)
             if auto:
+                log_action("L" if auto < 0 else "R")
                 t.move(auto, now)
 
-        # ---- gravity + lock delay ------------------------------------
-        t.tick(now)
+        # ---- gravity + lock delay (or replay step) -----------------
+        if replay_engine is not None:
+            replay_step(now)
+        else:
+            t.tick(now)
 
-        # ---- flash animation ------------------------------------------
-        if t.frozen:
-            t.advance_flash()
+            # ---- flash animation ------------------------------------------
+            if t.frozen:
+                t.advance_flash()
 
         # ---- effects: floating text, spin flash, beeps ----------------
         effects.sound = state.settings.sound
@@ -905,6 +1084,23 @@ def game_loop(stdscr: curses.window) -> None:
             if rank is not None:
                 new_best = True
                 name_awaiting = True
+
+        # Replay (P9): save the finished game's input log once, if the
+        # player actually played it (at least one authorized action).
+        if t.game_over and not replay_saved and replay_events:
+            replay_saved = True
+            state.save_replay(
+                {
+                    "seed": seed,
+                    "start_level": state.settings.start_level,
+                    "das": state.settings.das,
+                    "arr": state.settings.arr,
+                    "started_at": game_start,
+                    "score": t.score,
+                    "lines": t.lines,
+                    "events": replay_events,
+                }
+            )
 
         # ---- spawn animation ---------------------------------------------
         # A new piece has appeared (initial spawn, after a lock, a hold,
@@ -1028,11 +1224,20 @@ def game_loop(stdscr: curses.window) -> None:
         if glide_frac is not None:
             _draw_spawn_glide(stdscr, t, glide_frac, bx, by, ox, oy)
 
+        # Replay tag (P9): shown while the input log is being re-run.
+        if replay_engine is not None:
+            try:
+                stdscr.addstr(by + BOARD_H + 3, bx, "REPLAY", curses.A_DIM)
+            except curses.error:
+                pass
+
         # ---- modals: game over / help / settings ---------------------
         if t.game_over:
             draw_modal(
                 stdscr,
-                build_game_over_modal(t, state.best(), rank, typed_name, name_awaiting),
+                build_game_over_modal(
+                    t, state.best(), rank, typed_name, name_awaiting, seed
+                ),
                 max_x,
                 max_y,
             )

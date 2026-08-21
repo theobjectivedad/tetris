@@ -19,6 +19,11 @@ from .settings import Settings, coerce_setting, from_dict, with_value
 #: Maximum length of a player name (truncated, never raised).
 MAX_NAME = 10
 
+#: Name of the replay log file (next to the state file) and the number of
+#: most-recent replays kept.
+REPLAYS_FILE = "replays.json"
+MAX_REPLAYS = 5
+
 
 def _sanitize_name(raw: object) -> str:
     """Trim and cap a raw name; never raises (tolerates non-strings)."""
@@ -180,8 +185,49 @@ class GameState:
         except OSError:
             pass  # never let state saving crash the game
 
+    # -- replays ---------------------------------------------------------
+
+    def _load_replays(self) -> list[dict[str, object]]:
+        """Replays from the replay log; tolerant of missing/corrupt files."""
+        path = self.path.parent / REPLAYS_FILE
+        if not path.exists():
+            return []
+        try:
+            data = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            return []
+        if not isinstance(data, list):
+            return []
+        return [e for e in data if isinstance(e, dict)][-MAX_REPLAYS:]
+
+    def save_replay(self, replay: dict[str, object]) -> None:
+        """Append a finished game's replay (seed + timestamped input log)
+        to the replay log, keeping the ``MAX_REPLAYS`` most recent.
+        Failures are swallowed — replays are a convenience, not state."""
+        replays = self._load_replays()
+        replays.append(replay)
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            (self.path.parent / REPLAYS_FILE).write_text(
+                json.dumps(replays[-MAX_REPLAYS:], indent=2)
+            )
+        except (OSError, TypeError, ValueError):
+            pass
+
+    def last_replay(self) -> dict[str, object] | None:
+        """The most recently saved replay, or None if the log is empty."""
+        replays = self._load_replays()
+        return replays[-1] if replays else None
+
 
 # Back-compat name: the historical score-only class (see the scores.py shim).
 HighScores = GameState
 
-__all__ = ["MAX_NAME", "GameState", "HighScores", "default_state_path"]
+__all__ = [
+    "MAX_NAME",
+    "MAX_REPLAYS",
+    "REPLAYS_FILE",
+    "GameState",
+    "HighScores",
+    "default_state_path",
+]

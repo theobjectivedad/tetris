@@ -9,7 +9,13 @@ import pytest
 
 from tetris.pieces import MAX_START_LEVEL
 from tetris.settings import Settings
-from tetris.state import MAX_NAME, GameState, HighScores, default_state_path
+from tetris.state import (
+    MAX_NAME,
+    REPLAYS_FILE,
+    GameState,
+    HighScores,
+    default_state_path,
+)
 
 _LEGACY_ENTRY = {"score": 420, "lines": 4, "level": 1, "date": "2024-01-01 10:00"}
 
@@ -51,6 +57,34 @@ def test_keeps_top_ten(tmp_path: Path) -> None:
         90, 80, 70, 60, 50, 40, 30, 30, 20, 15,
     ]  # 11th score (10) dropped
     assert gs.record(5, 0, 1) is None  # below the top 10
+
+
+def test_replay_save_and_last(tmp_path: Path) -> None:
+    """P9: save_replay appends to replays.json (next to the state file),
+    keeps the 5 most recent, and last_replay returns the newest. A
+    corrupt/missing log is tolerated and a fresh save heals it."""
+    path = tmp_path / "state.json"
+    gs = GameState(path)
+    assert gs.last_replay() is None
+
+    for i in range(7):
+        gs.save_replay({"seed": i, "start_level": 1, "events": [[0.1, "L"]]})
+
+    log = tmp_path / REPLAYS_FILE
+    data = json.loads(log.read_text())
+    assert len(data) == 5  # the 5 most recent
+    assert [e["seed"] for e in data] == [2, 3, 4, 5, 6]
+    assert gs.last_replay()["seed"] == 6
+
+    # A corrupt log is tolerated (no raise) and the next save heals it.
+    log.write_text("{not json")
+    assert gs.last_replay() is None
+    gs.save_replay({"seed": 99, "start_level": 1, "events": []})
+    assert gs.last_replay()["seed"] == 99
+
+    # A non-list log is treated as empty.
+    log.write_text(json.dumps({"oops": True}))
+    assert gs.last_replay() is None
 
 
 def test_record_stores_name(tmp_path: Path) -> None:

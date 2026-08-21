@@ -70,6 +70,8 @@ KEYS: dict[str, bytes] = {
     "r": b"r",
     "s": b"s",
     "z": b"z",
+    "x": b"x",
+    "g": b"g",
 }
 
 
@@ -257,7 +259,8 @@ def tetris_start(width: int = 60, height: int = 30) -> str:
         "Keys: left/right move, up/Z rotate, down soft drop, space hard drop, "
         "c hold, p pause, ? help, h high scores, s settings, "
         "escape close/pause (at game over: new game, no save), "
-        "enter commit name + new game at game over, r restart, q quit.\n"
+        "enter commit name + new game at game over, r restart, q quit, "
+        "g replay the last saved game at game over.\n"
         "Use tetris_key to send input, tetris_wait to let time pass, "
         "tetris_screen to view the screen, tetris_stats for score/level/lines."
     )

@@ -236,8 +236,8 @@ def test_score_popup_renders_after_line_clear(monkeypatch) -> None:
     monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_scores.json")
 
     class RiggedTetris(main.Tetris):
-        def __init__(self, start_level: int = 1) -> None:
-            super().__init__(start_level=start_level)
+        def __init__(self, rng: random.Random | None = None, start_level: int = 1) -> None:
+            super().__init__(rng=rng, start_level=start_level)
             self.board[BOARD_H - 1] = ["J"] * 4 + ["", ""] + ["J"] * 5
             self.piece = Piece("O", 4, 0)
 
@@ -361,8 +361,8 @@ def test_game_over_uses_modal_with_time(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("TETRIS_SCORES", str(tmp_path / "state.json"))
 
     class OverTetris(main.Tetris):
-        def __init__(self, start_level: int = 1) -> None:
-            super().__init__(start_level=start_level)
+        def __init__(self, rng: random.Random | None = None, start_level: int = 1) -> None:
+            super().__init__(rng=rng, start_level=start_level)
             self.game_over = True
             self.score = 1234
 
@@ -487,8 +487,8 @@ def test_das_hold_drives_piece_to_left_wall(monkeypatch) -> None:
     seen = []
 
     class WatchTetris(main.Tetris):
-        def __init__(self, start_level: int = 1) -> None:
-            super().__init__(start_level=start_level)
+        def __init__(self, rng: random.Random | None = None, start_level: int = 1) -> None:
+            super().__init__(rng=rng, start_level=start_level)
             seen.append(self)
 
     monkeypatch.setattr(main, "Tetris", WatchTetris)
@@ -530,8 +530,8 @@ def test_pause_r_restarts(monkeypatch) -> None:
     created = []
 
     class ScoredTetris(main.Tetris):
-        def __init__(self, start_level: int = 1) -> None:
-            super().__init__(start_level=start_level)
+        def __init__(self, rng: random.Random | None = None, start_level: int = 1) -> None:
+            super().__init__(rng=rng, start_level=start_level)
             created.append(self)
             if len(created) == 1:  # rig only the pre-restart game
                 self.score = 500

@@ -70,8 +70,8 @@ def _over_tetris(monkeypatch, score: int = 5000, once: bool = False) -> None:
     created: list[main.Tetris] = []
 
     class OverTetris(main.Tetris):
-        def __init__(self, start_level: int = 1) -> None:
-            super().__init__(start_level=start_level)
+        def __init__(self, rng: random.Random | None = None, start_level: int = 1) -> None:
+            super().__init__(rng=rng, start_level=start_level)
             created.append(self)
             if once and len(created) > 1:
                 return
@@ -486,6 +486,25 @@ def test_game_over_modal_lines() -> None:
     assert "ENTER save + new game" in m3.lines
     assert "ESC  new game, no save" in m3.lines
     assert any("Q quit" in line for line in m3.lines)
+
+
+def test_game_over_modal_shows_seed_and_replay_hint() -> None:
+    """P9: the settled game-over modal shows the game's seed and a
+    'G replay last game' hint; in name-entry mode there is no G hint
+    (G is a typed name character there)."""
+    from tetris.engine import Tetris
+    from tetris.main import build_game_over_modal
+
+    t = Tetris(rng=random.Random(5))
+    settled = build_game_over_modal(t, 0, None, seed=12345)
+    assert "Seed: 12345" in settled.lines
+    assert any("G replay last game" in line for line in settled.lines)
+
+    naming = build_game_over_modal(
+        t, 0, 0, name="AB", name_awaiting=True, seed=12345
+    )
+    assert "Seed: 12345" in naming.lines
+    assert not any("G replay" in line for line in naming.lines)
 
 
 def test_keyreader_honors_custom_das_arr() -> None:
