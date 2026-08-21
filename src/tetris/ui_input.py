@@ -111,16 +111,31 @@ class KeyReader:
         A fresh press (or direction change) moves immediately. While the key
         stays held the terminal's auto-repeat keeps events arriving; DAS/ARR
         streaming (auto_direction) takes over after the DAS delay.
+
+        A repeat of the *current* direction that arrives BEFORE the DAS delay
+        has elapsed is not evidence the user is holding to stream — it is the
+        terminal/OS acknowledging the press, or a tap that was a hair longer
+        than instantaneous. It must NOT refresh the hold window: doing so let
+        a single early auto-repeat extend the hold past the DAS delay and
+        stream a second cell the user never asked for (the "moves 2 spaces"
+        bug). Only repeats that arrive after DAS has elapsed count as holding.
         """
         fresh = self._dir != d
         if fresh:
             self._dir = d
             self._dir_since = now
-        self._last_dir_event = now
+            self._last_dir_event = now
+        else:
+            # Repeat of the current direction. Before DAS has elapsed it is
+            # just the press being (re)acknowledged: ignore it entirely so it
+            # cannot prime a false hold. After DAS it is a real hold and may
+            # move (subject to the ARR gate below) while refreshing the hold
+            # window so auto_direction can keep streaming between repeats.
+            if now - self._dir_since < self.das:
+                return False
+            self._last_dir_event = now
         if now - self._last_move < self.arr:
             return False  # anti double-fire (e.g. ESC reassembly artifact)
-        if not fresh and now - self._dir_since < self.das:
-            return False  # held, but the DAS delay hasn't elapsed yet
         self._last_move = now
         return True
 

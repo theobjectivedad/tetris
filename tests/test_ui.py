@@ -461,6 +461,47 @@ def test_das_single_tap_is_exactly_one_move(monkeypatch) -> None:
     assert len(calls) == 1 and calls[0][0] == -1 and _near(calls[0][1], 0.5)
 
 
+def test_pre_das_repeat_does_not_prime_a_false_hold() -> None:
+    """Regression (the 'moves 2 spaces' bug), at the KeyReader level.
+
+    A repeat of the held direction that arrives BEFORE the DAS delay has
+    elapsed is just the terminal/OS acknowledging the press (a tap a hair
+    longer than instantaneous) — it must NOT refresh the hold window. If it
+    did, the hold would extend past the DAS delay and ``auto_direction``
+    would stream a second cell the user never asked for.
+    """
+    from tetris.main import KeyReader
+
+    r = KeyReader()  # defaults: das=0.17, arr=0.04, HOLD_WINDOW=0.06
+    # Fresh press at t=1.0: one immediate move.
+    assert r.on_direction(1, 1.0)
+    # A single early auto-repeat 0.13s later — before DAS (0.17s) has
+    # elapsed. It must not move, and (crucially) must not extend the hold.
+    assert not r.on_direction(1, 1.13)
+    # If the early repeat had (wrongly) refreshed the hold window, the hold
+    # would still be active at the DAS boundary and auto_direction would
+    # stream a second cell. It must be 0 — the tap is done.
+    assert r.auto_direction(1.18) == 0
+    # And no streaming anywhere in the follow-up window.
+    assert all(r.auto_direction(t) == 0 for t in (1.20, 1.22, 1.24))
+
+
+def test_post_das_repeat_still_streams() -> None:
+    """Counterpart guard: a repeat that arrives AFTER DAS has elapsed is a
+    real hold and must keep the piece streaming (we must not have over-
+    corrected the tap fix into breaking held-key streaming)."""
+    from tetris.main import KeyReader
+
+    r = KeyReader()  # das=0.17, arr=0.04
+    assert r.on_direction(1, 1.0)  # tap
+    # Repeats arrive every 30ms; the first one past DAS (1.17) is at 1.19.
+    for t in (1.03, 1.06, 1.09, 1.12, 1.15, 1.18, 1.21, 1.24):
+        r.on_direction(1, t)
+        r.auto_direction(t)
+    # A genuine hold must have produced several streaming moves by 1.24s.
+    assert r._last_move > 1.05
+
+
 def test_das_held_key_streams_after_delay(monkeypatch) -> None:
     """Held key: one tap move, a DAS gap with no moves, then ~40ms (ARR)
     streaming that stops shortly after the last event (no release event
