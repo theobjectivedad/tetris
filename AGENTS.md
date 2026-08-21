@@ -16,19 +16,55 @@ Terminal Tetris — a curses-based Tetris game.
 
 ## Layout
 
-- `src/tetris/pieces.py` — static SRS piece data + board dimensions.
-- `src/tetris/scoring.py` — scoring rules.
-- `src/tetris/board.py` — grid (board cell value type).
-- `src/tetris/engine.py` — pure Tetris engine; NO I/O of any kind.
-- `src/tetris/settings.py` — user settings model; pure data.
-- `src/tetris/state.py` — the ONLY file-I/O module: unified `state.json` holding
-  both high scores and settings. `scores.py` is a legacy re-export shim for
-  backward compatibility; do not add new imports of it.
-- `src/tetris/stats.py` — sidebar stat labels/formatting; shared by the curses UI
-  and the MCP screen parser.
-- `src/tetris/main.py` — curses UI.
-- `src/tetris/mcp/` — play-test MCP server.
+The game is a **pure core** (no I/O, fully unit-testable) under a thin
+curses **UI layer**. `state.py` is the only module that touches disk.
+
+```
+keyboard ──▶ ui_input.KeyReader (DAS/ARR throttles, ESC reassembly)
+                 │
+                 ▼
+main.game_loop  (50 fps frame loop; owns the `time` clock)
+                 │  now
+                 ▼
+ui_session.Session.on_frame ──▶ engine.Tetris (pure game state)
+                 │                  ▲
+                 ▼                  │ pieces / scoring / board (pure data)
+ui_render (board, sidebar, stats, modals; themes.py = palettes)
+
+state.GameState ◀──▶ state.json on disk (scores, settings, sprint best, replays)
+```
+
+- `src/tetris/pieces.py` — static SRS piece/kick tables + board dimensions.
+- `src/tetris/scoring.py` — pure scoring rules (`Scorer.breakdown`).
+- `src/tetris/board.py` — the grid: cell access, full-row detection, collapse.
+- `src/tetris/engine.py` — the pure Tetris engine (`Tetris`); NO I/O of any kind.
+- `src/tetris/settings.py` — user settings model + option metadata; pure data.
+- `src/tetris/state.py` — the ONLY file-I/O module: unified `state.json`
+  holding high scores, settings, sprint best, and the replay log.
+- `src/tetris/stats.py` — stat labels/formatting; shared UI + MCP contract.
+- `src/tetris/themes.py` — color-theme palettes; pure data (no curses import).
+- `src/tetris/main.py` — curses setup + 50 fps frame loop; re-exports for tests.
+- `src/tetris/ui_input.py` — key reading and input timing (`KeyReader`).
+- `src/tetris/ui_session.py` — per-game state machine (`Session.on_frame`).
+- `src/tetris/ui_render.py` — all drawing: board, sidebar, stats panel, modals.
+- `src/tetris/mcp/` — play-test MCP server (renders the game in a pty).
 - `tests/` — pytest suite at repo root.
+
+### Hard contracts
+
+Breaking any of these silently breaks the test suite or the MCP parser:
+
+- `main.py` keeps `Tetris`, `time`, `curses`, `game_loop`, `build_attrs`,
+  `draw_board`, and `BOARD_H` as module-level names — UI tests monkeypatch
+  `main.Tetris` / `main.time` with `monkeypatch.setattr`. The frame loop reads
+  the clock through module-level `time` on purpose (fake clock in tests).
+- `Tetris.__init__(rng=..., start_level=..., sprint=...)` kwarg names —
+  tests subclass the engine and pass these.
+- `stats.STAT_LABELS` — the UI renders exactly these labels and the MCP
+  parser (`mcp/server.py`) looks for exactly these; change both sides together.
+- `Tetris.snapshot()` is the single source of the sidebar stat values.
+- `Board` mirrors a list-of-rows protocol (`board[y]`, `board[y][x] = kind`,
+  iteration, slicing, `len`) used by the UI and the test rig.
 
 ## Commands
 
@@ -61,9 +97,9 @@ Terminal Tetris — a curses-based Tetris game.
 
 ## Conventions
 
-- Keep the engine pure: no terminal or file I/O in `engine.py`, `pieces.py`,
-  `scoring.py`, `board.py`, or `settings.py`. All persistence goes through
-  `state.py`, the single persistence point.
+- Keep the core pure: no terminal or file I/O in `engine.py`, `pieces.py`,
+  `scoring.py`, `board.py`, `settings.py`, `stats.py`, or `themes.py`.
+  All persistence goes through `state.py`, the single persistence point.
 - The MCP server parses the rendered sidebar text using `stats.STAT_LABELS` —
   keep those label strings stable (changing them silently breaks the MCP parser;
   update both sides together if it's ever necessary).

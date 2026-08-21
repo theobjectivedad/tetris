@@ -101,7 +101,7 @@ Or directly: `uv run python -m tetris.main`
 - `src/tetris/main.py` — curses entry point + 50 fps frame loop
 - `src/tetris/mcp/` — MCP play-test server (pty + pyte mirror, run with
   `just mcp` — see `src/tetris/mcp/README.md`)
-- `tests/` — 275 pytest tests (260 test functions; some parametrized)
+- `tests/` — 277 pytest tests (262 test functions; some parametrized)
 
 ## Roadmap
 
