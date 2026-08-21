@@ -251,7 +251,7 @@ class GameState:
         return replays[-1] if replays else None
 
 
-# Back-compat name: the historical score-only class (see the scores.py shim).
+# Back-compat alias for the historical score-only class name.
 HighScores = GameState
 
 __all__ = [

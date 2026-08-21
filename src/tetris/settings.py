@@ -58,10 +58,9 @@ def option(key: str) -> Option:
     Raises:
         KeyError: if ``key`` is not a known Settings field.
     """
-    try:
-        return _OPTIONS_BY_KEY[key]
-    except KeyError:
+    if key not in _OPTIONS_BY_KEY:
         raise KeyError(key) from None
+    return _OPTIONS_BY_KEY[key]
 
 
 def value_of(settings: Settings, key: str) -> SettingValue:

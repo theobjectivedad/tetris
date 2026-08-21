@@ -42,20 +42,22 @@ def format_time(total_seconds: float) -> str:
     return f"{s // 60}:{s % 60:02d}"
 
 
+def _display(label: str, snapshot: dict[str, int | bool | float | None]) -> str:
+    """The display string for ``label``'s snapshot field.
+
+    The classic labels are always backed by a non-None field (the only
+    None in a snapshot is the sprint-only ``time_left``), so the cast
+    here is sound.
+    """
+    return display_value(label, cast("bool | float", snapshot[_SNAPSHOT_KEY[label]]))
+
+
 def sidebar_stats(snapshot: dict[str, int | bool | float | None]) -> list[tuple[str, str]]:
     """Ordered (label, display-string) pairs for the left stats panel.
 
-    ``snapshot`` is ``Tetris.snapshot()``. The classic labels are always
-    backed by a non-None field (the only None in a snapshot is the
-    sprint-only ``time_left``), so the cast below is sound.
+    ``snapshot`` is ``Tetris.snapshot()``.
     """
-    return [
-        (
-            label,
-            display_value(label, cast("bool | float", snapshot[_SNAPSHOT_KEY[label]])),
-        )
-        for label in STAT_LABELS
-    ]
+    return [(label, _display(label, snapshot)) for label in STAT_LABELS]
 
 
 def panel_stats(
@@ -79,9 +81,7 @@ def panel_stats(
             else:
                 pairs.append(("TIME", "0:00"))
         else:
-            pairs.append(
-                (label, display_value(label, cast("bool | float", snapshot[_SNAPSHOT_KEY[label]])))
-            )
+            pairs.append((label, _display(label, snapshot)))
     return pairs
 
 

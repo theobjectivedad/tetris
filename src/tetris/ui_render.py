@@ -19,25 +19,38 @@ from .state import GameState
 from .stats import format_time, panel_stats
 from .themes import DEFAULT_THEME, THEMES
 
-# Colors: pair index -> piece kind
+# -- colors: pairs and cached attributes ------------------------------------
+#
+# COLORS maps a piece kind to its base color pair (1-7); init_colors()
+# builds pairs 1-9 from the active theme (text 8, highlight 9). The flash
+# pair (10) and the border/background pairs (11/12) are fixed.
 COLORS: dict[str, int] = {"I": 1, "O": 2, "T": 3, "S": 4, "Z": 5, "J": 6, "L": 7}
 
-# Frame rendering: the border and the board/panel background use
-# extended colors (gray 231 / near-black 235) so neither can read as a
-# block. On terminals with fewer colors ncurses maps the pairs to the
-# nearest available colors — the border falls back to the terminal's
-# default foreground (always readable) and the background fill is a
-# no-op. A_DIM remains the no-color fallback.
+# Border: gray 231 (a gray none of the pieces use) on capable terminals;
+# on terminals with fewer colors ncurses maps the pair to the nearest
+# available colors (the default foreground — always readable). A_DIM
+# remains the no-color fallback.
 BORDER_ATTR = curses.A_DIM
 BORDER_PAIR = 11
-# Board/panel background pair (ext color 235 on capable terminals;
-# ncurses maps it to a no-op fill on terminals with fewer colors).
+# Board/panel background pair: a very dark gray (ext 235) — a subtle
+# depth fill that becomes a no-op where the color is unmappable.
 BG_PAIR = 12
 
-# Drawn geometry: each cell renders as a solid 2-column block — about
-# square on a terminal's ~2:1 char aspect — and cells are contiguous with
-# no gap, so filled regions read as one tight solid mass. The play field
-# adds a 1-col solid wall outside the cell area.
+# Cached attributes, filled in by build_attrs() after init_colors(): the
+# render path used to call has_colors()/color_pair() (C crossings) per
+# cell — 20-60 times a frame. build_attrs() replaces that with plain
+# lookups.
+CELL_ATTRS: dict[str, int] = {}
+FLASH_ATTR = 0   # flash row (pair 10: white on yellow)
+STAT_ATTR = 0    # stats panel text (pair 8)
+BG_ATTR = 0      # board/panel background fill (pair 12)
+
+# -- drawn geometry and layout ------------------------------------------------
+#
+# Each cell renders as a solid 2-column block — about square on a
+# terminal's ~2:1 char aspect — and cells are contiguous with no gap, so
+# filled regions read as one tight solid mass. The play field adds a
+# 1-col solid wall outside the cell area.
 BOARD_PITCH = 2
 BOARD_INNER_W = BOARD_W * BOARD_PITCH  # 20
 BOARD_WALL = 1
@@ -55,6 +68,9 @@ NEED_W = STATS_W + PANEL_GAP + BOARD_W_DRAWN + PANEL_GAP + HOLD_W  # 60
 # Minimum height: everything fits in the 27-row vertical block (the NEXT
 # box's bottom row reaches by + 23 with by >= 1).
 NEED_H = 27
+
+
+# -- color initialization and cached attributes --------------------------------
 
 
 def init_colors(theme: str = "classic") -> None:
@@ -88,39 +104,13 @@ def init_colors(theme: str = "classic") -> None:
             curses.init_pair(i, curses.COLOR_WHITE, curses.COLOR_YELLOW)
         else:
             curses.init_pair(i, fg, curses.COLOR_BLACK)
-    # Border: a gray none of the pieces use (extended color 231) on
-    # capable terminals; on terminals with fewer colors ncurses maps the
-    # pair to the nearest available colors (the default foreground —
-    # always readable — so the border stays visible). NOTE: never use
-    # A_REVERSE here — with a white-fg/black-bg default it swaps to a
-    # black bar (invisible). The board/panel background (pair 12) is a very
-    # dark gray (ext 235): a subtle depth fill that becomes a no-op where
-    # the color is unmappable. (Some _curses builds lack color_count(), so
-    # this intentionally does not branch on it — ncurses degrades the
-    # extended pairs gracefully instead.)
+    # NOTE: never use A_REVERSE for the border — with a white-fg/black-bg
+    # default it swaps to a black bar (invisible). (Some _curses builds
+    # lack color_count(), so this intentionally does not branch on it —
+    # ncurses degrades the extended pairs gracefully instead.)
     curses.init_pair(BORDER_PAIR, 231, curses.COLOR_BLACK)
     curses.init_pair(BG_PAIR, curses.COLOR_BLACK, 235)
     BORDER_ATTR = curses.color_pair(BORDER_PAIR)
-
-
-def cell_attr(kind: str) -> int:
-    """Attr for a piece kind (cached by build_attrs after init_colors)."""
-    return CELL_ATTRS[kind]
-
-
-def bg_attr() -> int:
-    """Attr for the board/panel background fill (pair 12); 0 when the
-    terminal has no colors (the fill is plain background then — a no-op)."""
-    return curses.color_pair(BG_PAIR) if curses.has_colors() else 0
-
-
-# Cached attributes, built once by build_attrs() after init_colors(): the
-# render path used to call has_colors()/color_pair() (C crossings) per cell
-# — 20-60 times a frame. build_attrs() replaces that with plain lookups.
-CELL_ATTRS: dict[str, int] = {}
-FLASH_ATTR = 0   # flash row (pair 10: white on yellow)
-STAT_ATTR = 0    # stats panel text (pair 8)
-BG_ATTR = 0      # board/panel background fill (pair 12)
 
 
 def build_attrs() -> None:
@@ -132,6 +122,17 @@ def build_attrs() -> None:
     FLASH_ATTR = curses.color_pair(10) if curses.has_colors() else 0
     STAT_ATTR = curses.color_pair(8) if curses.has_colors() else 0
     BG_ATTR = bg_attr()
+
+
+def cell_attr(kind: str) -> int:
+    """Attr for a piece kind (cached by build_attrs after init_colors)."""
+    return CELL_ATTRS[kind]
+
+
+def bg_attr() -> int:
+    """Attr for the board/panel background fill (pair 12); 0 when the
+    terminal has no colors (the fill is plain background then — a no-op)."""
+    return curses.color_pair(BG_PAIR) if curses.has_colors() else 0
 
 
 # -- modal dialogs -----------------------------------------------------------
