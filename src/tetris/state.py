@@ -14,8 +14,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
-from .pieces import MAX_START_LEVEL
-from .settings import Settings, from_dict
+from .settings import Settings, coerce_setting, from_dict, with_value
 
 #: Maximum length of a player name (truncated, never raised).
 MAX_NAME = 10
@@ -143,21 +142,17 @@ class GameState:
     def update_settings(self, **changes: object) -> None:
         """Apply setting changes and save.
 
-        The UI only passes valid values; this still coerces start_level into
-        1..MAX_START_LEVEL and booleans into bool for safety, and ignores
-        unknown keys.
+        Values are coerced through the shared settings coercion (start_level
+        clamped to 1..MAX_START_LEVEL; bools, floats, and strings must be
+        the right type and an allowed value). Unknown keys and wrong-typed
+        values are ignored, so a bad change never corrupts the state.
         """
-        for key, value in changes.items():
-            if not hasattr(self.settings, key):
-                continue
-            if key == "start_level":
-                if isinstance(value, int) and not isinstance(value, bool):
-                    value = max(1, min(MAX_START_LEVEL, value))
-                else:
-                    continue
-            elif not isinstance(value, bool):
-                value = bool(value)
-            setattr(self.settings, key, value)
+        settings = self.settings
+        for key, raw in changes.items():
+            value = coerce_setting(key, raw)
+            if value is not None:
+                settings = with_value(settings, key, value)
+        self.settings = settings
         self.save()
 
     def save(self) -> None:

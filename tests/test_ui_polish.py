@@ -427,19 +427,20 @@ def test_no_name_entry_for_unranked_score(monkeypatch, tmp_path) -> None:
 
 
 def test_settings_rows_fixed_width() -> None:
-    """build_settings_modal: the five option rows are exactly 22 chars with
+    """build_settings_modal: the eight option rows are exactly 22 chars with
     the value right-aligned in the last 8 columns; blank + ESC footer."""
     from tetris.main import build_settings_modal
 
     m = build_settings_modal(Settings(), 0)
     assert m.title == "SETTINGS"
-    assert all(len(line) == 22 for line in m.lines[0:5])
+    assert all(len(line) == 22 for line in m.lines[0:8])
     assert m.lines[0] == f"{'start level':<14}{1:>8}"
     assert m.lines[0][14:22] == "       1"
     assert m.lines[1] == f"{'drop shadow':<14}{'on':>8}"
     assert m.lines[1][14:22] == "on".rjust(8)
-    assert m.lines[5] == ""
-    assert "ESC close" in m.lines[6]
+    assert m.lines[7] == f"{'theme':<14}{'classic':>8}"
+    assert m.lines[8] == ""
+    assert "ESC close" in m.lines[9]
 
 
 def test_help_modal_content() -> None:
