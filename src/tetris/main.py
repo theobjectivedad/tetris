@@ -756,8 +756,19 @@ def game_loop(stdscr: curses.window) -> None:
             state.set_entry_name(rank, typed_name)
         name_awaiting = False
 
+    def sleep_to_frame() -> None:
+        """Sleep the remainder of the 50 fps frame budget.
+
+        A fixed ``time.sleep(FRAME)`` would add the full 20 ms on top of
+        whatever the frame's work took, so the real cadence drifted to
+        20 ms + frame cost (jittery on slow terminals). With the drift
+        correction the average cadence stays at FRAME.
+        """
+        time.sleep(max(0.0, FRAME - (time.monotonic() - frame_start)))
+
     while True:
-        now = time.monotonic()
+        frame_start = time.monotonic()
+        now = frame_start
 
         # ---- input -------------------------------------------------
         key = reader.next_key(stdscr, now)
@@ -889,7 +900,7 @@ def game_loop(stdscr: curses.window) -> None:
             except curses.error:
                 pass
             stdscr.refresh()
-            time.sleep(FRAME)
+            sleep_to_frame()
             continue
 
         # Layout: one centered block — stats panel (left), board (center),
@@ -945,7 +956,7 @@ def game_loop(stdscr: curses.window) -> None:
             # it is a no-op on unchanged content, and the test suite
             # indexes frames by time, so the cadence must hold.
             stdscr.refresh()
-            time.sleep(FRAME)
+            sleep_to_frame()
             continue
         prev_scene = scene
 
@@ -1009,7 +1020,7 @@ def game_loop(stdscr: curses.window) -> None:
             draw_modal(stdscr, build_pause_modal(), max_x, max_y)
         stdscr.refresh()
 
-        time.sleep(FRAME)
+        sleep_to_frame()
 
 
 def main() -> None:
