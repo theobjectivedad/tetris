@@ -229,7 +229,7 @@ def build_help_modal() -> Modal:
 
 
 def build_sprint_modal(
-    t: Tetris, is_new_best: bool, best_time: float | None
+    engine: Tetris, is_new_best: bool, best_time: float | None
 ) -> Modal:
     """The sprint game-over dialog (P11).
 
@@ -237,16 +237,16 @@ def build_sprint_modal(
     Loss -> "TIME UP" with the lines reached and score. The best time is
     the store's best (a win that set a new best shows the flag instead).
     """
-    if t.won:
-        lines = [f"Time    {format_time(t.play_time)}"]
+    if engine.won:
+        lines = [f"Time    {format_time(engine.play_time)}"]
         if is_new_best:
             lines.append("* NEW BEST TIME *")
         elif best_time is not None:
             lines.append(f"Best    {format_time(best_time)}")
-        lines += [f"Lines   {t.lines}/{SPRINT_LINES}", f"Score   {t.score:,}"]
+        lines += [f"Lines   {engine.lines}/{SPRINT_LINES}", f"Score   {engine.score:,}"]
         title = "SPRINT CLEARED"
     else:
-        lines = [f"Lines   {t.lines}/{SPRINT_LINES}", f"Score   {t.score:,}"]
+        lines = [f"Lines   {engine.lines}/{SPRINT_LINES}", f"Score   {engine.score:,}"]
         if best_time is not None:
             lines.append(f"Best    {format_time(best_time)}")
         title = "TIME UP"
@@ -255,7 +255,7 @@ def build_sprint_modal(
 
 
 def build_game_over_modal(
-    t: Tetris,
+    engine: Tetris,
     best: int,
     rank: int | None,
     name: str = "",
@@ -273,13 +273,13 @@ def build_game_over_modal(
     the run replayable (G re-plays the last game).
     """
     lines = [
-        f"Score   {t.score:,}",
-        f"Lines   {t.lines}    Level {t.level}",
-        f"Pieces  {t.pieces}",
-        f"Time    {format_time(t.play_time)}",
+        f"Score   {engine.score:,}",
+        f"Lines   {engine.lines}    Level {engine.level}",
+        f"Pieces  {engine.pieces}",
+        f"Time    {format_time(engine.play_time)}",
     ]
-    if t.best_combo > 0:
-        lines.append(f"Best combo  {t.best_combo}")
+    if engine.best_combo > 0:
+        lines.append(f"Best combo  {engine.best_combo}")
     if rank is not None:
         if name_awaiting:
             lines.append(f"ENTER YOUR NAME: {name}█")
@@ -388,7 +388,7 @@ def draw_piece_preview(stdscr: curses.window, kind: str, ix: int, iy: int, dim: 
 
 def draw_board(
     stdscr: curses.window,
-    t: Tetris,
+    engine: Tetris,
     bx: int,
     by: int,
     show_ghost: bool = True,
@@ -415,20 +415,20 @@ def draw_board(
     except curses.error:
         pass
 
-    flash_rows = tuple(t.pending_clears)
+    flash_rows = tuple(engine.pending_clears)
     ghost_cells: set[tuple[int, int]] = set()
     live_cells: dict[tuple[int, int], str] = {}
-    if not t.game_over:
+    if not engine.game_over:
         if show_ghost:
             ghost_cells = {
-                (dx + t.piece.x, t.ghost_y() + dy) for dx, dy in PIECES[t.piece.kind][t.piece.rot]
+                (dx + engine.piece.x, engine.ghost_y() + dy) for dx, dy in PIECES[engine.piece.kind][engine.piece.rot]
             }
         # hide_live: the spawn glide draws the piece itself (see game_loop).
         if not hide_live:
-            live_cells = {(x, y): t.piece.kind for x, y in t.piece.cells() if y >= 0}
+            live_cells = {(x, y): engine.piece.kind for x, y in engine.piece.cells() if y >= 0}
 
     for y in range(BOARD_H):
-        row = t.board[y]
+        row = engine.board[y]
         line_parts: list[tuple[str, int | None]] = []
         for x in range(BOARD_W):
             kind = row[x]
@@ -437,7 +437,7 @@ def draw_board(
             elif kind:
                 line_parts.append(("██", FLASH_ATTR if y in flash_rows else cell_attr(kind)))
             elif (x, y) in ghost_cells:
-                line_parts.append(("▒▒", cell_attr(t.piece.kind) | curses.A_DIM))
+                line_parts.append(("▒▒", cell_attr(engine.piece.kind) | curses.A_DIM))
             else:
                 line_parts.append(("  ", None))
 
@@ -462,7 +462,7 @@ def draw_board(
 
 def _draw_spawn_glide(
     stdscr: curses.window,
-    t: Tetris,
+    engine: Tetris,
     frac: float,
     bx: int,
     by: int,
@@ -479,8 +479,8 @@ def _draw_spawn_glide(
     included), recomputed by the caller every frame so player input during
     the glide lands correctly.
     """
-    kind = t.piece.kind
-    live = [(x, y) for x, y in t.piece.cells() if y >= 0]
+    kind = engine.piece.kind
+    live = [(x, y) for x, y in engine.piece.cells() if y >= 0]
     if not live:
         return  # the whole piece is above the rim: nothing on the board yet
     min_x = min(x for x, _ in live)
@@ -508,15 +508,15 @@ def _draw_spawn_glide(
             pass
 
 
-def draw_stats_panel(stdscr: curses.window, t: Tetris, by: int, x: int, new_best: bool) -> None:
+def draw_stats_panel(stdscr: curses.window, engine: Tetris, by: int, x: int, new_best: bool) -> None:
     """The left column: the six stats at ``x`` (label dim, value bright,
     color pair 8), starting two rows below the block top, and the
     "★ NEW BEST ★" indicator two rows below the last stat row. The key
     legend and version live in the help modal (`?`) instead."""
-    for i, (label, value) in enumerate(panel_stats(t.snapshot(), sprint=t.sprint)):
+    for i, (label, value) in enumerate(panel_stats(engine.snapshot(), sprint=engine.sprint)):
         value_attr = STAT_ATTR
         # Sprint (P11): blink the countdown once 30 s or less remain.
-        if t.sprint and label == "TIME" and t.time_left is not None and t.time_left <= 30:
+        if engine.sprint and label == "TIME" and engine.time_left is not None and engine.time_left <= 30:
             value_attr = STAT_ATTR | curses.A_BLINK
         try:
             stdscr.addstr(
@@ -533,11 +533,11 @@ def draw_stats_panel(stdscr: curses.window, t: Tetris, by: int, x: int, new_best
             pass
 
 
-def draw_sidebar(stdscr: curses.window, t: Tetris, state: GameState, by: int, sx: int) -> None:
+def draw_sidebar(stdscr: curses.window, engine: Tetris, state: GameState, by: int, sx: int) -> None:
     """The right column: the HOLD box at ``sx`` and the NEXT box below it."""
     hold_x, hold_y = draw_box(stdscr, "HOLD", sx, by, HOLD_W, 6)
     if state.settings.hold:
-        draw_piece_preview(stdscr, t.holding or "", hold_x, hold_y, dim=not t.can_hold)
+        draw_piece_preview(stdscr, engine.holding or "", hold_x, hold_y, dim=not engine.can_hold)
     else:
         # Hold disabled: show a dimmed "off" in the box instead of a preview.
         try:
@@ -550,7 +550,7 @@ def draw_sidebar(stdscr: curses.window, t: Tetris, state: GameState, by: int, sx
     # pieces never touch. Box height 17 = 14 inner rows: 5 slots at pitch 3
     # span 4*3 + 2 = 14 rows, so the last slot's bottom row just fits.
     # Head bright, rest dim.
-    for i, kind in enumerate(t.queue[:5]):
+    for i, kind in enumerate(engine.queue[:5]):
         draw_piece_preview(stdscr, kind, next_x, next_y + i * 3, dim=i > 0)
 
 

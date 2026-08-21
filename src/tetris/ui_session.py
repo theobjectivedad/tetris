@@ -45,6 +45,8 @@ from .ui_render import (
 
 # how long the new piece glides in from the NEXT box
 SPAWN_ANIM_SECONDS = 0.15
+# how long the T-spin corner flash stays on screen
+SPIN_FLASH_SECONDS = 0.6
 
 # Beeps per effect kind.
 _BEEPS = {"clear": 1, "tetris": 2, "tspin": 3, "tspin-mini": 2}
@@ -120,7 +122,7 @@ class Session:
         self.replay_next = 0
         self.replay_stop_seq = 0
 
-        self.t = self.tetris_cls(
+        self.engine = self.tetris_cls(
             rng=random.Random(self.seed),
             start_level=self.state.settings.start_level,
             sprint=self.state.settings.mode == "sprint",
@@ -139,8 +141,8 @@ class Session:
         self.typed_name = ""
         self.was_paused = False
         # Spawn animation: the new piece glides in from the NEXT box head.
-        # last_seq starts at 0 (not t.spawn_seq) so the very first piece
-        # glides too.
+        # last_seq starts at 0 (not engine.spawn_seq) so the very first
+        # piece glides too.
         self.anim_start: float | None = None
         self.last_seq = 0
         # Static-scene detection: the scene key of the last drawn frame.
@@ -162,7 +164,7 @@ class Session:
         self.replay_start = 0.0
         self.replay_next = 0
         self.replay_stop_seq = 0
-        self.t = self.tetris_cls(
+        self.engine = self.tetris_cls(
             rng=random.Random(self.seed),
             start_level=self.state.settings.start_level,
             sprint=self.state.settings.mode == "sprint",
@@ -185,14 +187,14 @@ class Session:
 
     def open_menu(self, kind: str) -> None:
         """Open a modal menu; the game is paused for its duration."""
-        self.was_paused = self.t.paused
-        self.t.paused = True
+        self.was_paused = self.engine.paused
+        self.engine.paused = True
         self.menu = kind
         self.anim_start = None  # a menu open mid-flight cancels the glide
         self.reader.reset()  # no stale holds may survive a menu round-trip
 
     def close_menu(self) -> None:
-        self.t.paused = self.was_paused
+        self.engine.paused = self.was_paused
         self.menu = None
 
     def commit_name(self) -> None:
@@ -234,7 +236,7 @@ class Session:
 
         A fresh engine gets the original seed/start level; the logged
         events are re-fed at their original game-relative timestamps
-        (1× real time). ``t`` is swapped to the replay engine so the
+        (1× real time). ``engine`` is swapped to the replay engine so the
         normal draw path renders the replay; the original game-over
         engine is restored when the replay ends or is aborted (ESC).
         """
@@ -246,13 +248,13 @@ class Session:
         if not isinstance(raw_seed, int) or not isinstance(raw_level, int):
             return
         self.replay = data
-        self.replay_original = self.t
+        self.replay_original = self.engine
         self.replay_engine = self.tetris_cls(
             rng=random.Random(raw_seed),
             start_level=raw_level,
             sprint=bool(data.get("sprint", False)),
         )
-        self.t = self.replay_engine
+        self.engine = self.replay_engine
         self.replay_start = now
         self.replay_next = 0
         self.replay_stop_seq = 0
@@ -274,7 +276,7 @@ class Session:
         """End a replay (completed or aborted) and restore the original
         game-over screen (P9)."""
         if self.replay_original is not None:
-            self.t = self.replay_original
+            self.engine = self.replay_original
         self.replay = None
         self.replay_engine = None
         self.replay_original = None
@@ -285,7 +287,7 @@ class Session:
         self.reader.reset()
         self.effects.clear()
         self.anim_start = None
-        self.last_seq = self.t.spawn_seq  # no glide: the final piece is already placed
+        self.last_seq = self.engine.spawn_seq  # no glide: the final piece is already placed
         self.prev_scene = None  # force a redraw of the original game-over screen
 
     def replay_step(self, now: float) -> None:
@@ -325,29 +327,63 @@ class Session:
                 self.finish_replay()
 
     def on_frame(self, stdscr: curses.window, now: float) -> bool:
-        """Advance one frame; True when the player quit (Q in open play).
+        """Advance one frame; True when the player has quit.
+
+        The frame pipeline, in order:
+
+        1. read one logical key (replays only respond to ESC),
+        2. dispatch it — name entry, menus, game-over, play input,
+        3. stream held-direction moves (DAS/ARR),
+        4. step the engine (or the replay),
+        5. apply the engine's effects (floaters, beeps, spin flash),
+        6. record a finished game (high score, sprint best, replay),
+        7. start the spawn glide when a new piece appears,
+        8. draw the frame (skipped while the scene is unchanged).
 
         ``now`` is ``time.monotonic()`` at frame start, supplied by the
         frame loop in ``tetris.main``.
         """
         self.now = now
+        key = self._read_key(stdscr, now)
+        if self._dispatch_key(key, now):
+            return True
+        self._stream_held_direction(now)
+        self._step_engine(now)
+        self._apply_effects(now)
+        self._record_finished_game()
+        self._start_spawn_glide(now)
+        self._render(stdscr, now, key)
+        return False
 
-        # ---- input -------------------------------------------------
+    # -- input ---------------------------------------------------------
+
+    def _read_key(self, stdscr: curses.window, now: float) -> int:
+        """Read this frame's logical key.
+
+        Replay (P9): while a replay is running only ESC is meaningful —
+        it aborts back to the game-over screen. All other keys are
+        consumed so no live-game input can leak into the replayed run.
+        """
         key = self.reader.next_key(stdscr, now)
-
-        # Replay (P9): while a replay is running only ESC is meaningful —
-        # abort back to the game-over screen. All other keys are consumed
-        # so no live-game input can leak into the replayed run.
         if self.replay_engine is not None:
             if key in (27, KEY_ESCAPE):
                 self.finish_replay()
             key = -1
+        return key
 
+    def _dispatch_key(self, key: int, now: float) -> bool:
+        """Apply one key; True when the player quit (Q in open play).
+
+        ESC is the "back" key: at game over it starts a new game without
+        saving the score (any recorded entry is discarded); otherwise it
+        closes a dialog, unpauses, or pauses in open play. Q is the
+        long-standing quit alias (in a modal it only closes the dialog).
+        """
         # High-score name entry (game over, top-10): edit the typed name.
         # Enter commits and starts a new game (Enter arrives as 10 in most
         # pty/terminal setups, 13/KEY_ENTER in others); R/Q commit first,
         # then act on it. None of these count as typed characters.
-        if self.t.game_over and self.name_awaiting:
+        if self.engine.game_over and self.name_awaiting:
             if key in (10, 13, curses.KEY_ENTER):
                 self.commit_name()
                 self.reset_game()  # keep the score, start a new game
@@ -363,38 +399,34 @@ class Session:
                 self.close_menu()  # in a modal, Q closes the dialog, never quits
             else:
                 return True  # quit: main.game_loop breaks the frame loop
-        elif key in (ord("r"), ord("R")) and (self.t.game_over or self.t.paused):
+        elif key in (ord("r"), ord("R")) and (self.engine.game_over or self.engine.paused):
             self.reset_game()
-        elif key in (ord("g"), ord("G")) and self.t.game_over and not self.name_awaiting:
+        elif key in (ord("g"), ord("G")) and self.engine.game_over and not self.name_awaiting:
             self.start_replay(now)
         elif key in (27, KEY_ESCAPE):
-            # Escape is the "back" key: at game over it starts a new game
-            # without saving the score (any recorded entry is discarded);
-            # otherwise it closes a dialog, unpauses, or pauses in open
-            # play. (Q is the long-standing quit alias.)
-            if self.t.game_over:
+            if self.engine.game_over:
                 if self.rank is not None:
                     self.state.remove_entry(self.rank)
                 self.reset_game()
             elif self.menu is not None:
                 self.close_menu()
-            elif self.t.paused:
-                self.t.paused = False
+            elif self.engine.paused:
+                self.engine.paused = False
             else:
-                self.t.paused = True
-        elif key == ord("?") and not self.t.game_over:
+                self.engine.paused = True
+        elif key == ord("?") and not self.engine.game_over:
             if self.menu == "help":
                 self.close_menu()  # ? toggles the help dialog
             elif self.menu is None:
                 self.open_menu("help")
-        elif key in (ord("s"), ord("S")) and self.menu is None and not self.t.game_over:
+        elif key in (ord("s"), ord("S")) and self.menu is None and not self.engine.game_over:
             self.menu_cursor = 0
             self.open_menu("settings")
-        elif key in (ord("h"), ord("H")) and self.menu is None and not self.t.game_over:
+        elif key in (ord("h"), ord("H")) and self.menu is None and not self.engine.game_over:
             self.open_menu("scores")
         elif key in (ord("p"), ord("P")) and self.menu is None:
-            self.t.paused = not self.t.paused
-        elif self.menu == "settings" and not self.t.game_over:
+            self.engine.paused = not self.engine.paused
+        elif self.menu == "settings" and not self.engine.game_over:
             if key in (curses.KEY_UP, ord("k")):
                 self.menu_cursor = (self.menu_cursor - 1) % len(OPTIONS)
             elif key in (curses.KEY_DOWN, ord("j")):
@@ -413,71 +445,79 @@ class Session:
                 if opt.key == "theme":
                     init_colors(self.state.settings.theme)
                     build_attrs()
-        elif self.menu is None and not self.t.paused and not self.t.game_over:
+        elif self.menu is None and not self.engine.paused and not self.engine.game_over:
             if key in (curses.KEY_LEFT, curses.KEY_RIGHT):
                 d = -1 if key == curses.KEY_LEFT else 1
                 # One move per fresh press; holding streams at ARR after DAS.
                 if self.reader.on_direction(d, now):
                     self.log_action("L" if d < 0 else "R")
-                    self.t.move(d, now)
+                    self.engine.move(d, now)
             elif key == curses.KEY_UP:
                 if self.reader.allow_rotate(now):
                     self.log_action("U")
-                    self.t.rotate(1, now)
+                    self.engine.rotate(1, now)
             elif key in (ord("z"), ord("Z")):
                 if self.reader.allow_rotate(now):
                     self.log_action("Z")
-                    self.t.rotate(-1, now)
+                    self.engine.rotate(-1, now)
             elif key in (ord("x"), ord("X")):
                 if self.reader.allow_rotate(now):
                     self.log_action("X")
-                    self.t.rotate_180(now)
+                    self.engine.rotate_180(now)
             elif key == curses.KEY_DOWN:
                 self.log_action("S")
-                self.t.soft_drop()
+                self.engine.soft_drop()
             elif key == ord(" "):
                 self.log_action("H")
-                if self.t.hard_drop() > 0 and self.state.settings.shake:
+                if self.engine.hard_drop() > 0 and self.state.settings.shake:
                     self.effects.shake_until = now + 0.12
             elif key in (ord("c"), ord("C")):
                 self.log_action("C")
                 if self.state.settings.hold:
-                    self.t.hold()
+                    self.engine.hold()
 
-        # ---- DAS/ARR streaming (held-key moves without new events) -------
-        if self.menu is None and not self.t.paused and not self.t.game_over:
+        return False
+
+    # -- simulation ------------------------------------------------------
+
+    def _stream_held_direction(self, now: float) -> None:
+        """DAS/ARR streaming: held-key moves without new key events."""
+        if self.menu is None and not self.engine.paused and not self.engine.game_over:
             auto = self.reader.auto_direction(now)
             if auto:
                 self.log_action("L" if auto < 0 else "R")
-                self.t.move(auto, now)
+                self.engine.move(auto, now)
 
-        # ---- gravity + lock delay (or replay step) -----------------
+    def _step_engine(self, now: float) -> None:
+        """Gravity + lock delay — or one replay step while re-running."""
         if self.replay_engine is not None:
             self.replay_step(now)
-        else:
-            self.t.tick(now)
+            return
+        self.engine.tick(now)
+        if self.engine.frozen:
+            self.engine.advance_flash()
 
-            # ---- flash animation ------------------------------------------
-            if self.t.frozen:
-                self.t.advance_flash()
-
-        # ---- effects: floating text, spin flash, beeps ----------------
+    def _apply_effects(self, now: float) -> None:
+        """Consume the engine's events: floating text, spin flash, beeps."""
         self.effects.sound = self.state.settings.sound
-        self.effects.on_events(self.t.events, now)
+        self.effects.on_events(self.engine.events, now)
 
-        # ---- game over ---------------------------------------------------
+    # -- game-over bookkeeping --------------------------------------------
+
+    def _record_finished_game(self) -> None:
+        """Record a finished game: high score, sprint best, and the replay."""
         # Classic: a top-10 score enters the high-score table. Sprint never
         # writes the score table (P11) — its result is a best clear time.
         if (
-            self.t.game_over
+            self.engine.game_over
             and not self.new_best
             and self.rank is None
-            and not self.t.sprint
-            and self.t.score > 0
+            and not self.engine.sprint
+            and self.engine.score > 0
         ):
             self.rank = self.state.record(
-                self.t.score, self.t.lines, self.t.level,
-                time_s=self.t.play_time, best_combo=self.t.best_combo,
+                self.engine.score, self.engine.lines, self.engine.level,
+                time_s=self.engine.play_time, best_combo=self.engine.best_combo,
             )
             if self.rank is not None:
                 self.new_best = True
@@ -485,89 +525,123 @@ class Session:
 
         # Sprint result (P11): recorded once. A win stores the clear time
         # (lower is better); a loss just surfaces the existing best.
-        if self.t.game_over and self.t.sprint and not self.sprint_handled:
+        if self.engine.game_over and self.engine.sprint and not self.sprint_handled:
             self.sprint_handled = True
-            if self.t.won:
+            if self.engine.won:
                 self.sprint_new_best, self.sprint_best = self.state.record_sprint(
-                    self.t.play_time
+                    self.engine.play_time
                 )
             else:
                 self.sprint_best = self.state.best_sprint_time()
 
         # Replay (P9): save the finished game's input log once, if the
         # player actually played it (at least one authorized action).
-        if self.t.game_over and not self.replay_saved and self.replay_events:
+        if self.engine.game_over and not self.replay_saved and self.replay_events:
             self.replay_saved = True
             self.state.save_replay(
                 {
                     "seed": self.seed,
                     "start_level": self.state.settings.start_level,
-                    "sprint": self.t.sprint,
+                    "sprint": self.engine.sprint,
                     "das": self.state.settings.das,
                     "arr": self.state.settings.arr,
                     "started_at": self.game_start,
-                    "score": self.t.score,
-                    "lines": self.t.lines,
+                    "score": self.engine.score,
+                    "lines": self.engine.lines,
                     "events": self.replay_events,
                 }
             )
 
-        # ---- spawn animation ---------------------------------------------
-        # A new piece has appeared (initial spawn, after a lock, a hold,
-        # or a committed line clear): glide it in from the NEXT box head.
+    def _start_spawn_glide(self, now: float) -> None:
+        """Start the glide-in of a newly spawned piece.
+
+        A new piece has appeared (initial spawn, after a lock, a hold, or
+        a committed line clear): glide it in from the NEXT box head.
+        """
         if (
-            not self.t.game_over
+            not self.engine.game_over
             and self.menu is None
-            and not self.t.paused
-            and self.t.spawn_seq != self.last_seq
+            and not self.engine.paused
+            and self.engine.spawn_seq != self.last_seq
         ):
             self.anim_start = now
-            self.last_seq = self.t.spawn_seq
+            self.last_seq = self.engine.spawn_seq
 
-        # ---- draw ----------------------------------------------------
+    # -- rendering ---------------------------------------------------------
+
+    def _render(self, stdscr: curses.window, now: float, key: int) -> None:
+        """Draw the frame, skipping the redraw while the scene is unchanged.
+
+        ``refresh()`` runs every frame either way: it is a no-op on
+        unchanged content, and the test suite indexes frames by time, so
+        the per-frame cadence must hold.
+        """
         max_y, max_x = stdscr.getmaxyx()
-        sidebar_x_offset = BOARD_W_DRAWN + 4  # HOLD/NEXT x = board bx + 26
         if max_x < NEED_W or max_y < NEED_H:
-            stdscr.erase()
-            try:
-                stdscr.addstr(1, 1, f"Terminal too small — need {NEED_W}×{NEED_H}, got {max_x}×{max_y}")
-            except curses.error:
-                pass
+            self._draw_too_small(stdscr, max_x, max_y)
+            return
+        glide_frac = self._spawn_glide_fraction(now)
+        self._expire_spin_flash(now)
+        scene = self._scene_key(now, max_x, max_y, glide_frac)
+        if scene == self.prev_scene and key == -1 and now >= self.effects.shake_until:
+            # Nothing changed since the last drawn frame: keep the current
+            # virtual screen.
             stdscr.refresh()
-            return False
+            return
+        self.prev_scene = scene
+        self._draw_scene(stdscr, now, max_x, max_y, glide_frac)
+        self._draw_modals(stdscr, max_x, max_y)
+        stdscr.refresh()
 
-        # Layout: one centered block — stats panel (left), board (center),
-        # HOLD/NEXT column (right).
-        block_x = max(0, (max_x - NEED_W) // 2)
-        bx = block_x + STATS_W + PANEL_GAP  # board origin
-        by = max(1, (max_y - (BOARD_H + 7)) // 2)
+    def _draw_too_small(self, stdscr: curses.window, max_x: int, max_y: int) -> None:
+        """The 'terminal too small' notice instead of the game."""
+        stdscr.erase()
+        try:
+            stdscr.addstr(
+                1, 1, f"Terminal too small — need {NEED_W}×{NEED_H}, got {max_x}×{max_y}"
+            )
+        except curses.error:
+            pass
+        stdscr.refresh()
 
-        # Spawn glide: while the new piece is still in flight the live piece
-        # is hidden and drawn by the glide (below) instead; once the
-        # duration has elapsed the piece simply appears at its grid
-        # position.
-        glide_frac: float | None = None
-        if self.anim_start is not None and not self.t.game_over:
-            elapsed = now - self.anim_start
-            if elapsed >= SPAWN_ANIM_SECONDS:
-                self.anim_start = None
-            else:
-                glide_frac = min(1.0, elapsed / SPAWN_ANIM_SECONDS)
+    def _spawn_glide_fraction(self, now: float) -> float | None:
+        """Progress of the in-flight spawn glide (0..1), or None.
 
-        # T-spin corner flash expiry (checked before the scene key so the
-        # expiry frame flips the key and redraws once without the flash).
-        if self.effects.spin_flash is not None and now - self.effects.spin_flash[1] >= 0.6:
+        While the new piece is still in flight the live piece is hidden
+        and drawn by the glide instead; once the duration has elapsed the
+        piece simply appears at its grid position.
+        """
+        if self.anim_start is None or self.engine.game_over:
+            return None
+        elapsed = now - self.anim_start
+        if elapsed >= SPAWN_ANIM_SECONDS:
+            self.anim_start = None
+            return None
+        return min(1.0, elapsed / SPAWN_ANIM_SECONDS)
+
+    def _expire_spin_flash(self, now: float) -> None:
+        # Checked before the scene key so the expiry frame flips the key
+        # and redraws once without the flash.
+        if (
+            self.effects.spin_flash is not None
+            and now - self.effects.spin_flash[1] >= SPIN_FLASH_SECONDS
+        ):
             self.effects.spin_flash = None
 
-        # ---- static-scene skip ---------------------------------------
-        # t.version (P5) bumps on every observable engine change — moves,
-        # rotations, drops, holds, gravity steps, locks, clears, spawns,
-        # pause flips, and game over — so one counter covers the board,
-        # stats panel, and game-over modal; the rest covers layout,
-        # effects, and modals. Any term flipping makes the frame dirty.
-        scene: tuple[object, ...] = (
+    def _scene_key(
+        self, now: float, max_x: int, max_y: int, glide_frac: float | None
+    ) -> tuple[object, ...]:
+        """Every value the drawn frame depends on — the static-scene key.
+
+        engine.version (P5) bumps on every observable engine change —
+        moves, rotations, drops, holds, gravity steps, locks, clears,
+        spawns, pause flips, and game over — so one counter covers the
+        board, stats panel, and game-over modal; the rest covers layout,
+        effects, and modals. Any term flipping makes the frame dirty.
+        """
+        return (
             max_x, max_y,  # resize / layout
-            self.t.version,  # every engine state change (incl. game_over/paused)
+            self.engine.version,  # every engine state change (incl. game_over/paused)
             tuple(
                 (tx, row, int((now - born) * 2.5))
                 for tx, row, born in self.effects.floaters
@@ -582,17 +656,27 @@ class Session:
             # Sprint countdown (P11): the displayed second changes once per
             # second even though the engine's version only bumps on
             # gravity/locks — quantize it so the TIME row stays fresh.
-            int(self.t.time_left) if (self.t.sprint and self.t.time_left is not None) else None,
-            self.state.best() if self.t.game_over else 0,
+            int(self.engine.time_left)
+            if self.engine.sprint and self.engine.time_left is not None
+            else None,
+            self.state.best() if self.engine.game_over else 0,
         )
-        if scene == self.prev_scene and key == -1 and now >= self.effects.shake_until:
-            # Nothing changed since the last drawn frame: keep the current
-            # virtual screen. refresh() still runs once per iteration —
-            # it is a no-op on unchanged content, and the test suite
-            # indexes frames by time, so the cadence must hold.
-            stdscr.refresh()
-            return False
-        self.prev_scene = scene
+
+    def _draw_scene(
+        self,
+        stdscr: curses.window,
+        now: float,
+        max_x: int,
+        max_y: int,
+        glide_frac: float | None,
+    ) -> None:
+        """Draw the game without modals: board, floaters, panels, glide."""
+        # Layout: one centered block — stats panel (left), board (center),
+        # HOLD/NEXT column (right).
+        block_x = max(0, (max_x - NEED_W) // 2)
+        bx = block_x + STATS_W + PANEL_GAP  # board origin
+        by = max(1, (max_y - (BOARD_H + 7)) // 2)
+        sidebar_x_offset = BOARD_W_DRAWN + 4  # HOLD/NEXT x = board bx + 26
 
         stdscr.erase()
 
@@ -601,7 +685,7 @@ class Session:
         ox, oy = self.effects.shake(now)
 
         draw_board(
-            stdscr, self.t, bx + ox, by + oy,
+            stdscr, self.engine, bx + ox, by + oy,
             show_ghost=self.state.settings.ghost, hide_live=glide_frac is not None,
         )
 
@@ -628,13 +712,13 @@ class Session:
                 except curses.error:
                     pass
 
-        draw_stats_panel(stdscr, self.t, by, block_x, self.new_best)
-        draw_sidebar(stdscr, self.t, self.state, by, bx + sidebar_x_offset)
+        draw_stats_panel(stdscr, self.engine, by, block_x, self.new_best)
+        draw_sidebar(stdscr, self.engine, self.state, by, bx + sidebar_x_offset)
 
         # Spawn glide: drawn last among the non-modal elements, so it can
         # legitimately overlap the board's right wall while flying in.
         if glide_frac is not None:
-            _draw_spawn_glide(stdscr, self.t, glide_frac, bx, by, ox, oy)
+            _draw_spawn_glide(stdscr, self.engine, glide_frac, bx, by, ox, oy)
 
         # Replay tag (P9): shown while the input log is being re-run.
         if self.replay_engine is not None:
@@ -643,12 +727,13 @@ class Session:
             except curses.error:
                 pass
 
-        # ---- modals: game over / help / settings ---------------------
-        if self.t.game_over:
-            if self.t.sprint:
+    def _draw_modals(self, stdscr: curses.window, max_x: int, max_y: int) -> None:
+        """The topmost layer: game-over / sprint / help / settings / pause."""
+        if self.engine.game_over:
+            if self.engine.sprint:
                 draw_modal(
                     stdscr,
-                    build_sprint_modal(self.t, self.sprint_new_best, self.sprint_best),
+                    build_sprint_modal(self.engine, self.sprint_new_best, self.sprint_best),
                     max_x,
                     max_y,
                 )
@@ -656,7 +741,7 @@ class Session:
                 draw_modal(
                     stdscr,
                     build_game_over_modal(
-                        self.t, self.state.best(), self.rank, self.typed_name,
+                        self.engine, self.state.best(), self.rank, self.typed_name,
                         self.name_awaiting, self.seed,
                     ),
                     max_x,
@@ -665,13 +750,14 @@ class Session:
         elif self.menu == "help":
             draw_modal(stdscr, build_help_modal(), max_x, max_y)
         elif self.menu == "settings":
-            draw_modal(stdscr, build_settings_modal(self.state.settings, self.menu_cursor), max_x, max_y)
+            draw_modal(
+                stdscr, build_settings_modal(self.state.settings, self.menu_cursor),
+                max_x, max_y,
+            )
         elif self.menu == "scores":
             draw_modal(stdscr, build_scores_modal(self.state), max_x, max_y)
-        elif self.t.paused:
+        elif self.engine.paused:
             draw_modal(stdscr, build_pause_modal(), max_x, max_y)
-        stdscr.refresh()
-        return False
 
 
 __all__ = ["SPAWN_ANIM_SECONDS", "Effects", "Session"]
