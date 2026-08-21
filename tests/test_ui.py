@@ -313,8 +313,8 @@ def test_x_key_rotates_piece_180(monkeypatch) -> None:
     monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_x180.json")
 
     class RiggedTetris(main.Tetris):
-        def __init__(self, rng: random.Random | None = None, start_level: int = 1) -> None:
-            super().__init__(rng=rng, start_level=start_level)
+        def __init__(self, rng: random.Random | None = None, start_level: int = 1, sprint: bool = False) -> None:
+            super().__init__(rng=rng, start_level=start_level, sprint=sprint)
             self.piece = Piece("T", 3, 0)
 
     monkeypatch.setattr(main, "Tetris", RiggedTetris)
