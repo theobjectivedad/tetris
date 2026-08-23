@@ -463,6 +463,64 @@ def test_ghost_setting_toggles_ghost_piece(monkeypatch, tmp_path) -> None:
     assert "\u2592" not in off
 
 
+# ---------------------------------------------------------------------------
+# Live NEW BEST indicator (P20)
+# ---------------------------------------------------------------------------
+
+
+def test_live_new_best_indicator_when_beating_pre_game_best(monkeypatch, tmp_path) -> None:
+    """P20: the stats panel shows NEW BEST while the live score has
+    passed the board's top score from before the game started."""
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "scores": [
+                    {"name": "X", "score": 5000, "lines": 5, "level": 2,
+                     "date": "2026-08-21 10:00"},
+                ],
+                "settings": {},
+            }
+        )
+    )
+    monkeypatch.setenv("TETRIS_SCORES", str(path))
+
+    class PastBest(main.Tetris):
+        def __init__(self, rng: random.Random | None = None, start_level: int = 1, sprint: bool = False) -> None:
+            super().__init__(rng=rng, start_level=start_level, sprint=sprint)
+            self.score = 6000  # already past the 5000 pre-game best
+
+    monkeypatch.setattr(main, "Tetris", PastBest)
+    assert "NEW BEST" in grid_to_text(run_game(events=[], duration=0.5))
+
+
+def test_no_new_best_indicator_below_pre_game_best(monkeypatch, tmp_path) -> None:
+    """P20: no indicator while the score is still below the pre-game
+    best, and none at all for a sprint game (sprint never writes the
+    score table)."""
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "scores": [
+                    {"name": "X", "score": 5000, "lines": 5, "level": 2,
+                     "date": "2026-08-21 10:00"},
+                ],
+                "settings": {},
+            }
+        )
+    )
+    monkeypatch.setenv("TETRIS_SCORES", str(path))
+
+    class BelowBest(main.Tetris):
+        def __init__(self, rng: random.Random | None = None, start_level: int = 1, sprint: bool = False) -> None:
+            super().__init__(rng=rng, start_level=start_level, sprint=sprint)
+            self.score = 100
+
+    monkeypatch.setattr(main, "Tetris", BelowBest)
+    assert "NEW BEST" not in grid_to_text(run_game(events=[], duration=0.5))
+
+
 def test_hold_off_renders_off_in_hold_box(monkeypatch, tmp_path) -> None:
     path = tmp_path / "state.json"
     path.write_text(json.dumps({"settings": {"hold": False}}))

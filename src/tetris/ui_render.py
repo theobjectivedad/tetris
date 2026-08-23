@@ -369,18 +369,28 @@ def build_settings_modal(settings: Settings, cursor: int) -> Modal:
 def build_scores_modal(state: GameState) -> Modal:
     """The `h` high-scores dialog: the top-10 table.
 
-    Columns: rank, name (— when unset), comma-formatted score, level, and
-    the YYYY-MM-DD date. Rows are a fixed 39 chars so the table lines up.
+    Columns: rank, name (— when unset), comma-formatted score, level,
+    the entry's play time (M:SS; — for legacy entries without one,
+    P21), and the YYYY-MM-DD date. Rows are a fixed 45 chars so the
+    table lines up.
     """
-    lines: list[str] = [f"{'#':>2}  {'NAME':<10}{'SCORE':>9}{'LVL':>4}  DATE"]
+    lines: list[str] = [
+        f"{'#':>2}  {'NAME':<10}{'SCORE':>9}{'LVL':>4}{'TIME':>6}  DATE"
+    ]
     for i, entry in enumerate(state.entries[:10], start=1):
         name = str(entry.get("name") or "").strip() or "—"
         score = entry.get("score")
         score = score if isinstance(score, int) and not isinstance(score, bool) else 0
         level = entry.get("level")
         level = level if isinstance(level, int) and not isinstance(level, bool) else 0
+        t = entry.get("time")
+        t_str = (
+            format_time(float(t))
+            if isinstance(t, (int, float)) and not isinstance(t, bool)
+            else "—"
+        )
         date = str(entry.get("date") or "")[:10]
-        lines.append(f"{i:>2}  {name:<10}{score:>9,}{level:>4}  {date}")
+        lines.append(f"{i:>2}  {name:<10}{score:>9,}{level:>4}{t_str:>6}  {date}")
     if not state.entries:
         lines = ["No scores yet — play a game!"]
     lines += ["", "ESC close"]

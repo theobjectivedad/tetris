@@ -230,16 +230,17 @@ def test_scores_modal_empty_board(monkeypatch, tmp_path) -> None:
 
 
 def test_build_scores_modal_row_format(tmp_path) -> None:
-    """build_scores_modal: exact header and row formats — 39-char entry
-    rows in score-desc order, em dash for an empty name, blank + footer."""
+    """build_scores_modal: exact header and row formats — 45-char entry
+    rows (P21: TIME column) in score-desc order, em dash for an empty
+    name or a legacy entry without a time, blank + footer."""
     from tetris.main import build_scores_modal
 
     path = tmp_path / "state.json"
     entries = [
         {"name": "ZED", "score": 900, "lines": 1, "level": 3,
-         "date": "2026-07-01 10:00"},
+         "time": 225.0, "best_combo": 2, "date": "2026-07-01 10:00"},
         {"name": "", "score": 500, "lines": 1, "level": 2,
-         "date": "2026-07-01 10:00"},
+         "date": "2026-07-01 10:00"},  # legacy: no time key
         {"name": "BOB", "score": 100, "lines": 1, "level": 1,
          "date": "2026-07-01 10:00"},
     ]
@@ -248,11 +249,19 @@ def test_build_scores_modal_row_format(tmp_path) -> None:
     m = build_scores_modal(GameState(path))
     assert m.title == "HIGH SCORES"
     assert len(m.lines) == 6  # header + 3 rows + "" + footer
-    assert m.lines[0] == f"{'#':>2}  {'NAME':<10}{'SCORE':>9}{'LVL':>4}  DATE"
+    assert m.lines[0] == (
+        f"{'#':>2}  {'NAME':<10}{'SCORE':>9}{'LVL':>4}{'TIME':>6}  DATE"
+    )
     for line in m.lines[1:4]:
-        assert len(line) == 39
-    assert m.lines[1] == f"{1:>2}  {'ZED':<10}{900:>9,}{3:>4}  {'2026-07-01'}"
-    assert m.lines[2] == f"{2:>2}  {'—':<10}{500:>9,}{2:>4}  {'2026-07-01'}"
+        assert len(line) == 45
+    # P21: the entry's play time renders as M:SS (225 s -> 3:45)...
+    assert m.lines[1] == (
+        f"{1:>2}  {'ZED':<10}{900:>9,}{3:>4}{'3:45':>6}  {'2026-07-01'}"
+    )
+    # ...and a legacy entry without a time gets the em dash.
+    assert m.lines[2] == (
+        f"{2:>2}  {'—':<10}{500:>9,}{2:>4}{'—':>6}  {'2026-07-01'}"
+    )
     assert m.lines[4] == ""
     assert m.lines[5] == "ESC close"
 

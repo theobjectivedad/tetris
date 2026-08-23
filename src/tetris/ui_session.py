@@ -141,6 +141,9 @@ class Session:
         )
         self.new_best = False
         self.rank: int | None = None
+        # P20: the board's top score before this game started — the live
+        # NEW BEST indicator fires when the score passes it.
+        self.best_at_start = self.state.best()
         # Sprint bookkeeping (P11): recorded once when a sprint game ends.
         self.sprint_handled = False
         self.sprint_new_best = False
@@ -185,6 +188,7 @@ class Session:
         )
         self.new_best = False
         self.rank = None
+        self.best_at_start = self.state.best()
         self.sprint_handled = False
         self.sprint_new_best = False
         self.sprint_best = None
@@ -613,6 +617,18 @@ class Session:
                 }
             )
 
+    def _live_new_best(self) -> bool:
+        """P20: True while the live score has already passed the pre-game
+        best — the stats panel then shows the NEW BEST indicator so the
+        player knows they are chasing a record mid-game. Sprint never
+        writes the score table, so it is excluded."""
+        return (
+            not self.engine.game_over
+            and not self.engine.sprint
+            and self.engine.score > 0
+            and self.engine.score > self.best_at_start
+        )
+
     def _start_spawn_glide(self, now: float) -> None:
         """Start the glide-in of a newly spawned piece.
 
@@ -711,7 +727,7 @@ class Session:
             glide_frac,
             now < self.effects.shake_until,  # the unshake frame must redraw
             self.menu, self.menu_cursor, self.typed_name, self.name_awaiting,  # modal content
-            self.new_best, self.rank,
+            self.new_best, self.rank, self._live_new_best(),
             self.state.settings.ghost, self.state.settings.hold,
             self.state.settings.theme,  # live recolor on switch (P12)
             # Sprint countdown (P11): the displayed second changes once per
@@ -774,7 +790,9 @@ class Session:
                 except curses.error:
                     pass
 
-        draw_stats_panel(stdscr, self.engine, by, block_x, self.new_best)
+        draw_stats_panel(
+            stdscr, self.engine, by, block_x, self.new_best or self._live_new_best()
+        )
         draw_sidebar(stdscr, self.engine, self.state, by, bx + sidebar_x_offset)
 
         # Spawn glide: drawn last among the non-modal elements, so it can
