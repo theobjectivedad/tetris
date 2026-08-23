@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import curses
 import random
+import time
 
 from .engine import Event, Tetris
 from .pieces import BOARD_H, BOARD_W
@@ -33,6 +34,7 @@ from .ui_render import (
     build_game_over_modal,
     build_help_modal,
     build_pause_modal,
+    build_replays_modal,
     build_scores_modal,
     build_settings_modal,
     build_sprint_modal,
@@ -243,18 +245,21 @@ class Session:
             engine.rotate_180(at)
         # Unknown tokens (e.g. ones logged by a newer build) are skipped.
 
-    def start_replay(self, now: float) -> None:
-        """G at game over: re-run the most recent saved replay (P9).
+    def start_replay(self, now: float, index: int = 0) -> None:
+        """G at game over: re-run a saved replay (P9; P19 adds the index).
 
         A fresh engine gets the original seed/start level; the logged
         events are re-fed at their original game-relative timestamps
-        (1× real time). ``engine`` is swapped to the replay engine so the
-        normal draw path renders the replay; the original game-over
-        engine is restored when the replay ends or is aborted (ESC).
+        (scaled by the replay speed, P18). ``engine`` is swapped to the
+        replay engine so the normal draw path renders the replay; the
+        original game-over engine is restored when the replay ends or is
+        aborted (ESC). ``index`` selects from the saved replays, newest
+        first (0 = the most recent, i.e. what G always played).
         """
-        data = self.state.last_replay()
-        if data is None:
+        replays = self.state.replays()
+        if not 0 <= index < len(replays):
             return
+        data = replays[index]
         raw_seed = data.get("seed")
         raw_level = data.get("start_level")
         if not isinstance(raw_seed, int) or not isinstance(raw_level, int):
@@ -431,13 +436,21 @@ class Session:
             self.reset_game()
         elif key in (ord("g"), ord("G")) and self.engine.game_over and not self.name_awaiting:
             self.start_replay(now)
+        elif key in (ord("l"), ord("L")) and self.engine.game_over and not self.name_awaiting:
+            # P19: the replay list. L is also a name character, so it
+            # stays off the table during name entry (like G).
+            self.menu_cursor = 0
+            self.open_menu("replays")
         elif key in (27, KEY_ESCAPE):
-            if self.engine.game_over:
+            if self.menu is not None:
+                # An open dialog (help/settings/scores, or the replay
+                # list at game over) closes before any game-over or
+                # pause handling below.
+                self.close_menu()
+            elif self.engine.game_over:
                 if self.rank is not None:
                     self.state.remove_entry(self.rank)
                 self.reset_game()
-            elif self.menu is not None:
-                self.close_menu()
             elif self.engine.paused:
                 self.engine.paused = False
             else:
@@ -473,6 +486,13 @@ class Session:
                 if opt.key == "theme":
                     init_colors(self.state.settings.theme)
                     build_attrs()
+        elif self.menu == "replays":
+            # P19: digits 1-5 start that saved replay (newest first).
+            if key in (ord("1"), ord("2"), ord("3"), ord("4"), ord("5")):
+                index = key - ord("1")
+                if index < len(self.state.replays()):
+                    self.close_menu()
+                    self.start_replay(now, index=index)
         elif self.menu is None and not self.engine.paused and not self.engine.game_over:
             if key in (curses.KEY_LEFT, ord("a"), ord("A"), curses.KEY_RIGHT, ord("d"), ord("D")):
                 # a/d are the home-row aliases for the arrow keys (P15);
@@ -586,6 +606,7 @@ class Session:
                     "das": self.state.settings.das,
                     "arr": self.state.settings.arr,
                     "started_at": self.game_start,
+                    "date": time.strftime("%Y-%m-%d %H:%M"),
                     "score": self.engine.score,
                     "lines": self.engine.lines,
                     "events": self.replay_events,
@@ -775,7 +796,12 @@ class Session:
     def _draw_modals(self, stdscr: curses.window, max_x: int, max_y: int) -> None:
         """The topmost layer: game-over / sprint / help / settings / pause."""
         if self.engine.game_over:
-            if self.engine.sprint:
+            if self.menu == "replays":
+                # P19: the replay list overlays the game-over screen.
+                draw_modal(
+                    stdscr, build_replays_modal(self.state), max_x, max_y
+                )
+            elif self.engine.sprint:
                 draw_modal(
                     stdscr,
                     build_sprint_modal(self.engine, self.sprint_new_best, self.sprint_best),

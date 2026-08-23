@@ -75,6 +75,7 @@ KEYS: dict[str, bytes] = {
     "x": b"x",
     "g": b"g",
     "f": b"f",
+    "l": b"l",
 }
 
 
@@ -264,6 +265,7 @@ def tetris_start(width: int = 60, height: int = 30) -> str:
         "escape close/pause (at game over: new game, no save), "
         "enter commit name + new game at game over, r restart, q quit, "
         "g replay the last saved game at game over, "
+        "l open the replay list at game over (1-5 play a saved replay), "
         "f cycle replay speed (1x/2x/4x) while a replay is running.\n"
         "Use tetris_key to send input, tetris_wait to let time pass, "
         "tetris_screen to view the screen, tetris_stats for score/level/lines."

@@ -212,6 +212,7 @@ def build_help_modal() -> Modal:
         "H scores        Q quit",
         "ESC close / pause",
         "GAME OVER: ENTER save, ESC skip",
+        "AT GAME OVER: L replay list",
         "AT REPLAY: F cycle 1x/2x/4x",
         separator,
         "SCORING (all points × level):",
@@ -251,8 +252,42 @@ def build_sprint_modal(
         if best_time is not None:
             lines.append(f"Best    {format_time(best_time)}")
         title = "TIME UP"
-    lines += ["", "R/ESC new game       Q quit", "G replay last game"]
+    lines += [
+        "",
+        "R/ESC new game       Q quit",
+        "G replay last game",
+        "L replay list (1-5 play)",
+    ]
     return Modal(title, lines)
+
+
+def build_replays_modal(state: GameState) -> Modal:
+    """The replay list dialog (P19), opened with L at game over.
+
+    Lists the saved replays newest first (row 1 = the most recent): score,
+    lines, mode, and the wall-clock date. Digits 1-5 start a replay; the
+    game-over screen is restored when it ends or is aborted (ESC). Rows
+    are a fixed 43 chars so the table lines up.
+    """
+    replays = state.replays()
+    if not replays:
+        lines = [
+            "No saved replays yet.",
+            "Play a game first — the five",
+            "most recent finished games are kept.",
+        ]
+    else:
+        lines = [f"{'#':>1}  {'SCORE':>8}{'LINES':>6}  {'MODE':<7}  DATE"]
+        for i, rp in enumerate(replays, start=1):
+            score = rp.get("score")
+            score = score if isinstance(score, int) and not isinstance(score, bool) else 0
+            lines_c = rp.get("lines")
+            lines_c = lines_c if isinstance(lines_c, int) and not isinstance(lines_c, bool) else 0
+            mode = "sprint" if rp.get("sprint") else "classic"
+            date = str(rp.get("date") or "")[:16]
+            lines.append(f"{i:>1}  {score:>8,}{lines_c:>6}  {mode:<7}  {date}")
+    lines += ["", "1-5 play    ESC close"]
+    return Modal("REPLAYS", lines)
 
 
 def build_game_over_modal(
@@ -293,8 +328,9 @@ def build_game_over_modal(
     if seed is not None:
         lines.append(f"Seed: {seed}")
     if name_awaiting:
-        # During name entry G is a typed name character (like any letter),
-        # so replay is offered only on the settled game-over screen.
+        # During name entry G and L are typed name characters (like any
+        # letter), so the replay hints are offered only on the settled
+        # game-over screen.
         lines += [
             "",
             "ENTER save + new game",
@@ -302,7 +338,12 @@ def build_game_over_modal(
             "Q quit",
         ]
     else:
-        lines += ["", "R/ESC new game       Q quit", "G replay last game"]
+        lines += [
+            "",
+            "R/ESC new game       Q quit",
+            "G replay last game",
+            "L replay list (1-5 play)",
+        ]
     return Modal("GAME OVER", lines)
 
 
@@ -578,6 +619,7 @@ __all__ = [
     "build_game_over_modal",
     "build_help_modal",
     "build_pause_modal",
+    "build_replays_modal",
     "build_scores_modal",
     "build_settings_modal",
     "build_sprint_modal",

@@ -250,6 +250,14 @@ class GameState:
         replays = self._load_replays()
         return replays[-1] if replays else None
 
+    def replays(self) -> list[dict[str, object]]:
+        """The saved replays, most recent first (up to MAX_REPLAYS).
+
+        The replay list dialog (P19) shows this order: the newest run is
+        row 1. Replays older than the MAX_REPLAYS window are gone.
+        """
+        return list(reversed(self._load_replays()))
+
 
 # Back-compat alias for the historical score-only class name.
 HighScores = GameState
