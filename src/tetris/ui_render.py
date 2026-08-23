@@ -155,7 +155,7 @@ class Modal:
 
 def draw_modal(stdscr: curses.window, modal: Modal, max_x: int, max_y: int) -> None:
     """Render ``modal`` centered in the window."""
-    width = max(len(modal.title), max((len(l) for l in modal.lines), default=0)) + 6
+    width = max(len(modal.title), max((len(line) for line in modal.lines), default=0)) + 6
     height = len(modal.lines) + 2
     width = min(width, max_x - 2)
     height = min(height, max_y - 2)
@@ -212,6 +212,7 @@ def build_help_modal() -> Modal:
         "H scores        Q quit",
         "ESC close / pause",
         "GAME OVER: ENTER save, ESC skip",
+        "AT REPLAY: F cycle 1x/2x/4x",
         separator,
         "SCORING (all points × level):",
         "Single 100    Double 300",

@@ -74,6 +74,7 @@ KEYS: dict[str, bytes] = {
     "z": b"z",
     "x": b"x",
     "g": b"g",
+    "f": b"f",
 }
 
 
@@ -262,7 +263,8 @@ def tetris_start(width: int = 60, height: int = 30) -> str:
         "c hold, p pause, ? help, h high scores, s settings, "
         "escape close/pause (at game over: new game, no save), "
         "enter commit name + new game at game over, r restart, q quit, "
-        "g replay the last saved game at game over.\n"
+        "g replay the last saved game at game over, "
+        "f cycle replay speed (1x/2x/4x) while a replay is running.\n"
         "Use tetris_key to send input, tetris_wait to let time pass, "
         "tetris_screen to view the screen, tetris_stats for score/level/lines."
     )
@@ -319,7 +321,7 @@ def tetris_screen(
     """
     sess = require_session()
     lines = sess.text_lines()
-    h, w = len(lines), max(len(l) for l in lines) if lines else 0
+    h, w = len(lines), max(len(line) for line in lines) if lines else 0
     y1 = (y1 if y1 is not None else h) - 1
     x1 = x1 if x1 is not None else w
     out = []

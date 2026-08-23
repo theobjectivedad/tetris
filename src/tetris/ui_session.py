@@ -126,7 +126,9 @@ class Session:
         self.replay: dict[str, object] | None = None
         self.replay_engine: Tetris | None = None
         self.replay_original: Tetris | None = None
-        self.replay_start = 0.0
+        self.replay_vt = 0.0      # virtual replay time (advances at replay_speed)
+        self.replay_last_t = 0.0  # wall-clock time of the last replay step
+        self.replay_speed = 1.0   # P18: 1x / 2x / 4x (F during replay)
         self.replay_next = 0
         self.replay_stop_seq = 0
 
@@ -169,7 +171,9 @@ class Session:
         self.replay = None
         self.replay_engine = None
         self.replay_original = None
-        self.replay_start = 0.0
+        self.replay_vt = 0.0
+        self.replay_last_t = 0.0
+        self.replay_speed = 1.0
         self.replay_next = 0
         self.replay_stop_seq = 0
         self.engine = self.tetris_cls(
@@ -263,7 +267,9 @@ class Session:
             sprint=bool(data.get("sprint", False)),
         )
         self.engine = self.replay_engine
-        self.replay_start = now
+        self.replay_vt = 0.0
+        self.replay_last_t = now
+        self.replay_speed = 1.0
         self.replay_next = 0
         self.replay_stop_seq = 0
         # The replay must use the original game's input timing, and must
@@ -290,6 +296,7 @@ class Session:
         self.replay_original = None
         self.replay_next = 0
         self.replay_stop_seq = 0
+        self.replay_speed = 1.0
         self.reader.das = self.state.settings.das
         self.reader.arr = self.state.settings.arr
         self.reader.reset()
@@ -306,7 +313,12 @@ class Session:
         if not isinstance(events, list) or self.replay_engine is None:
             self.finish_replay()
             return
-        elapsed = now - self.replay_start
+        # P18: advance virtual time at the current speed. An accumulator
+        # (rather than (now - start) * speed) so a mid-replay speed change
+        # never jumps the timeline.
+        self.replay_vt += (now - self.replay_last_t) * self.replay_speed
+        self.replay_last_t = now
+        elapsed = self.replay_vt
         while self.replay_next < len(events):
             ev = events[self.replay_next]
             if (
@@ -339,7 +351,7 @@ class Session:
 
         The frame pipeline, in order:
 
-        1. read one logical key (replays only respond to ESC),
+        1. read one logical key (replays respond to ESC and F),
         2. dispatch it — name entry, menus, game-over, play input,
         3. stream held input (DAS/ARR moves + soft-drop stream),
         4. step the engine (or the replay),
@@ -368,14 +380,22 @@ class Session:
     def _read_key(self, stdscr: curses.window, now: float) -> int:
         """Read this frame's logical key.
 
-        Replay (P9): while a replay is running only ESC is meaningful —
-        it aborts back to the game-over screen. All other keys are
+        Replay (P9): while a replay is running only ESC and F are
+        meaningful — ESC aborts back to the game-over screen, and F
+        cycles the replay speed 1x/2x/4x (P18). All other keys are
         consumed so no live-game input can leak into the replayed run.
         """
         key = self.reader.next_key(stdscr, now)
         if self.replay_engine is not None:
             if key in (27, KEY_ESCAPE):
                 self.finish_replay()
+            elif key in (ord("f"), ord("F")):
+                # P18: 1x -> 2x -> 4x -> 1x.
+                self.replay_speed = (
+                    2.0 if self.replay_speed == 1.0
+                    else 4.0 if self.replay_speed == 2.0
+                    else 1.0
+                )
             key = -1
         return key
 
@@ -679,6 +699,7 @@ class Session:
             int(self.engine.time_left)
             if self.engine.sprint and self.engine.time_left is not None
             else None,
+            self.replay_speed,  # P18: a speed change must redraw the tag
             self.state.best() if self.engine.game_over else 0,
         )
 
@@ -740,10 +761,14 @@ class Session:
         if glide_frac is not None:
             _draw_spawn_glide(stdscr, self.engine, glide_frac, bx, by, ox, oy)
 
-        # Replay tag (P9): shown while the input log is being re-run.
+        # Replay tag (P9): shown while the input log is being re-run;
+        # carries the speed while it is not 1x (P18).
         if self.replay_engine is not None:
+            tag = "REPLAY" if self.replay_speed == 1.0 else (
+                f"REPLAY {self.replay_speed:.0f}x"
+            )
             try:
-                stdscr.addstr(by + BOARD_H + 3, bx, "REPLAY", curses.A_DIM)
+                stdscr.addstr(by + BOARD_H + 3, bx, tag, curses.A_DIM)
             except curses.error:
                 pass
 
