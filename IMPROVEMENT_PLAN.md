@@ -507,3 +507,57 @@ the live NEW BEST indicator — keeps the MCP stats contract untouched).
 
 **All 8 Phase 2 items (P14–P21) are complete.** Final gate: `just check`
 green (ruff + mypy --strict), 297 pytest tests passing.
+
+---
+
+## Phase 3 — "Juice round" (P22–P30)
+
+**Goal (verbatim):** "any more improvements in the 'juice' category?
+I'd love to do another round" — more improvements in the juice category:
+feedback that makes actions feel responsive and moments feel big.
+
+Existing juice inventory (baseline): line-clear flash (8 frames, white on
+yellow), floating score text, hard-drop shake (0.12 s), big-clear shake
+(0.2 s, P17), T-spin corner flash (0.6 s), LEVEL UP floater + beep (P16),
+spawn glide (0.15 s), piece-colored ghost, sprint ≤30 s TIME blink, live
+NEW BEST panel indicator (P20). Gaps this round closes: no landing
+feedback at all, no "about to lock" cue, no danger warning, combo/B2B
+are invisible during play, game over has no sound, sprint lacks
+endgame tension, hold and rotation are silent.
+
+| #   | Item                                            | Rationale / design                                                            |
+|-----|-------------------------------------------------|--------------------------------------------------------------------------------|
+| P22 | **Lock flash**                                  | Locked cells flash in the theme highlight color (pair 9) for 0.12 s. Engine exposes `last_lock` (cells of the just-locked piece, no-clear locks only; None on clearing locks and at game over); the UI captures it when the next piece spawns (same hook as the spawn glide). No line-clear overlap by construction. |
+| P23 | **Lock-delay pulse**                            | A grounded piece alternates normal/dim at 8 Hz while the 0.5 s lock delay ticks — the standard "it's about to lock" cue. Engine exposes a `grounded` property; the pulse is a scene-key term so it survives the static-scene skip. |
+| P24 | **Danger zone**                                 | When the stack reaches within 4 rows of the ceiling (`DANGER_TOP_ROWS`, engine `stack_top` property) the board's top border draws blinking red (fixed pair 13, white on red; A_BLINK fallback without color). State flips only on locks, so engine.version covers the scene key. |
+| P25 | **Combo & B2B feedback**                        | "COMBO ×N" floater (row − 2) when a clear continues a combo (engine.combo ≥ 2 after the commit); "B2B" floater (row + 1) on B2B-qualifying clears (Tetris, or T-spin ≥ 2 lines) while B2B is active; the sidebar B2B stat renders in the highlight color while active. `Event` gains an additive `lines: int = 0` field so the UI can tell a no-line T-spin (which leaves b2b untouched) from a qualifying one. |
+| P26 | **Game-over sting**                             | On the game-over flip (live games only — never the replayed engine): a 3-beep pattern. Classic/top-out/sprint-loss: (0, 0.18, 0.42 s) — slow, descending feel. Sprint win: (0, 0.1, 0.2 s) — brisk, rising feel. Beeps are a timestamped queue in Effects, pumped per frame (the terminal bell is one tone; rhythm is what we can do). |
+| P27 | **New-best jingle**                             | The instant the live score first passes the pre-game best (P20's trigger): a "NEW BEST!" floater at the board center + a brisk 3-beep (0, 0.08, 0.16 s). One-shot per game; excluded for sprint and during replays. |
+| P28 | **Sprint urgency**                              | The TIME stat draws in the danger color while ≤ 10 s remain (on top of the existing ≤ 30 s blink); a 1 Hz tick beep on each second boundary during the final 5 s (1..5), sound-setting-gated. The per-second scene-key quantization already redraws on each flip. |
+| P29 | **Hold flash**                                  | A successful hold (grab or swap — detected via `can_hold` flipping) flashes the HOLD box border and preview in the highlight color for 0.2 s. Rejected holds (can't-hold window, frozen, hold disabled) give no flash. |
+| P30 | **Rotation flash**                              | A successful rotation (U/Z/X) highlights the piece in the theme highlight color for 0.1 s — a small "click" that makes rotation feel crisp. |
+
+**Milestones** (one commit each, gate + tests per milestone):
+
+- M1: P22 + P23 — the landing feel (lock flash + lock-delay pulse)
+- M2: P24 + P25 — danger zone + combo/B2B feedback
+- M3: P26 + P27 — sound moments (game-over sting + new-best jingle)
+- M4: P28 + P29 — sprint urgency + hold flash
+- M5: P30 — rotation flash
+- M6: final sync — README, plan log, full gate, MCP play-test
+
+**Non-goals (deliberate):**
+
+- Per-pitch sound design — the terminal bell is a single tone; only
+  count/rhythm/pattern is expressible (curses.beep()).
+- Score count-up animation — it would break the MCP stats contract
+  (the parser reads the rendered SCORE value) and defeat the
+  static-scene skip.
+- Sub-cell piece interpolation — terminal cells are discrete; DAS/ARR
+  streaming and the spawn glide already carry the motion feel.
+- "GET READY" start countdown — changes start timing and would break
+  the spawn-glide test rig; the spawn glide already covers the start.
+
+### Progress log
+
+(Phase 3 entries appended as milestones land.)

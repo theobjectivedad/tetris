@@ -124,6 +124,10 @@ class Tetris:
         self._last_gravity_at: float | None = None
         self._last_tick_at: float | None = None  # last tick() time, for play_time
         self._pending_spin: bool | None = None  # last lock's T-spin: True=full, False=mini
+        # P22: the cells of the most recently locked piece (no-clear locks
+        # only; None otherwise) — the UI flashes them when the next piece
+        # spawns (same hook as the spawn glide).
+        self.last_lock: list[tuple[int, int]] | None = None
 
         # First piece (may flip game_over if it collides on spawn).
         self.piece = self._spawn()
@@ -298,6 +302,13 @@ class Tetris:
         """True while a line-clear flash animation is pending."""
         return bool(self.pending_clears)
 
+    @property
+    def grounded(self) -> bool:
+        """P23: True while the live piece rests on the floor or a stack —
+        the lock delay is ticking. The UI pulses the piece in this state so
+        the player can see when it is about to lock."""
+        return self._grounded
+
     def _can_fall(self) -> bool:
         p = self.piece
         return not self._collides(Piece(p.kind, p.x, p.y + 1, p.rot), p.rot)
@@ -390,6 +401,7 @@ class Tetris:
 
     def _lock(self) -> None:
         self.version += 1
+        self.last_lock = None
         for cx, cy in self.piece.cells():
             if cy < 0:
                 self._set_game_over()
@@ -408,6 +420,10 @@ class Tetris:
             self.pending_clears = full
             self.flash_frames = FLASH_FRAMES
         else:
+            # P22: remember the just-locked cells so the UI can flash them;
+            # clearing locks keep last_lock None (the line-clear flash is the
+            # effect there).
+            self.last_lock = [(cx, cy) for cx, cy in self.piece.cells() if cy >= 0]
             self._on_lock_no_clears()
             self.piece = self._spawn()
 

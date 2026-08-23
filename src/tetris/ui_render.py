@@ -43,6 +43,7 @@ BG_PAIR = 12
 CELL_ATTRS: dict[str, int] = {}
 FLASH_ATTR = 0   # flash row (pair 10: white on yellow)
 STAT_ATTR = 0    # stats panel text (pair 8)
+HILITE_ATTR = 0  # highlight pair (9): lock/rotation flash, hold flash, active B2B (P22/P29/P30/P25)
 BG_ATTR = 0      # board/panel background fill (pair 12)
 
 # -- drawn geometry and layout ------------------------------------------------
@@ -116,11 +117,15 @@ def init_colors(theme: str = "classic") -> None:
 def build_attrs() -> None:
     """Cache the per-kind/global attrs after init_colors() has run
     (color_pair() needs a live curses screen)."""
-    global FLASH_ATTR, STAT_ATTR, BG_ATTR
+    global FLASH_ATTR, STAT_ATTR, HILITE_ATTR, BG_ATTR
     for kind, pair in COLORS.items():
         CELL_ATTRS[kind] = curses.color_pair(pair) if curses.has_colors() else 0
     FLASH_ATTR = curses.color_pair(10) if curses.has_colors() else 0
     STAT_ATTR = curses.color_pair(8) if curses.has_colors() else 0
+    # The highlight pair is latent in the themes' rendering; as a flash
+    # accent it needs a visible fallback on monochrome terminals — bold
+    # brightens the default foreground.
+    HILITE_ATTR = curses.color_pair(9) if curses.has_colors() else curses.A_BOLD
     BG_ATTR = bg_attr()
 
 
@@ -445,7 +450,18 @@ def draw_board(
     by: int,
     show_ghost: bool = True,
     hide_live: bool = False,
+    lock_cells: frozenset[tuple[int, int]] | None = None,
+    pulse_dim: bool = False,
+    rotate_flash: bool = False,
 ) -> None:
+    """Draw the board frame, background, cells, ghost, and live piece.
+
+    ``lock_cells`` (P22): the just-locked cells, drawn in the highlight
+    accent while the lock flash is active. ``pulse_dim`` (P23): dim the
+    live piece this frame — the 8 Hz lock-delay pulse. ``rotate_flash``
+    (P30): draw the live piece in the highlight accent while a successful
+    rotation's flash is active (wins over the pulse).
+    """
     # Solid border around the play area. The walls are outside the cell
     # area (1 col per side), so blocks never render on top of them.
     right = bx + BOARD_W_DRAWN - 1
@@ -485,9 +501,23 @@ def draw_board(
         for x in range(BOARD_W):
             kind = row[x]
             if (x, y) in live_cells:
-                line_parts.append(("██", cell_attr(live_cells[(x, y)])))
+                if rotate_flash:
+                    # P30: a successful rotation highlights the piece.
+                    line_parts.append(("██", HILITE_ATTR | curses.A_BOLD))
+                elif pulse_dim:
+                    # P23: the grounded piece pulses while the lock delay
+                    # ticks — the "it's about to lock" cue.
+                    line_parts.append(("██", cell_attr(live_cells[(x, y)]) | curses.A_DIM))
+                else:
+                    line_parts.append(("██", cell_attr(live_cells[(x, y)])))
             elif kind:
-                line_parts.append(("██", FLASH_ATTR if y in flash_rows else cell_attr(kind)))
+                if y in flash_rows:
+                    line_parts.append(("██", FLASH_ATTR))
+                elif lock_cells is not None and (x, y) in lock_cells:
+                    # P22: the just-locked cells flash in the highlight accent.
+                    line_parts.append(("██", HILITE_ATTR | curses.A_BOLD))
+                else:
+                    line_parts.append(("██", cell_attr(kind)))
             elif (x, y) in ghost_cells:
                 line_parts.append(("▒▒", cell_attr(engine.piece.kind) | curses.A_DIM))
             else:
@@ -617,6 +647,7 @@ __all__ = [
     "BORDER_PAIR",
     "CELL_OFF",
     "COLORS",
+    "HILITE_ATTR",
     "HOLD_W",
     "NEED_H",
     "NEED_W",

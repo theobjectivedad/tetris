@@ -52,6 +52,8 @@ SPIN_FLASH_SECONDS = 0.6
 # how long the board shakes after a big clear (P17: tetris / full T-spin);
 # a hard-drop shake is shorter (0.12 s, set in _dispatch_key)
 BIG_SHAKE_SECONDS = 0.2
+# how long the just-locked cells flash after a no-clear lock (P22)
+LOCK_FLASH_SECONDS = 0.12
 
 # Beeps per effect kind.
 _BEEPS = {"clear": 1, "tetris": 2, "tspin": 3, "tspin-mini": 2, "levelup": 2}
@@ -65,6 +67,8 @@ class Effects:
         self.floaters: list[tuple[str, int, float]] = []
         self.shake_until = 0.0
         self.spin_flash: tuple[tuple[int, int], float] | None = None
+        # P22: the just-locked cells and the time the flash expires.
+        self.lock_flash: tuple[frozenset[tuple[int, int]], float] | None = None
         self.sound = True  # gated per frame from the user's sound setting
         self.shake_on = True  # gated per frame from the user's shake setting
 
@@ -72,6 +76,7 @@ class Effects:
         self.floaters.clear()
         self.shake_until = 0.0
         self.spin_flash = None
+        self.lock_flash = None
 
     def on_events(self, events: list[Event], now: float) -> None:
         for ev in events:
@@ -633,7 +638,9 @@ class Session:
         """Start the glide-in of a newly spawned piece.
 
         A new piece has appeared (initial spawn, after a lock, a hold, or
-        a committed line clear): glide it in from the NEXT box head.
+        after a committed line clear): glide it in from the NEXT box head.
+        The same hook captures the just-locked cells for the P22 flash —
+        a no-clear lock spawns its replacement immediately.
         """
         if (
             not self.engine.game_over
@@ -643,6 +650,10 @@ class Session:
         ):
             self.anim_start = now
             self.last_seq = self.engine.spawn_seq
+            if self.engine.last_lock:
+                self.effects.lock_flash = (
+                    frozenset(self.engine.last_lock), now + LOCK_FLASH_SECONDS
+                )
 
     # -- rendering ---------------------------------------------------------
 
@@ -726,6 +737,19 @@ class Session:
             self.effects.spin_flash,
             glide_frac,
             now < self.effects.shake_until,  # the unshake frame must redraw
+            # P22: the lock flash's expiry frame must redraw once without it.
+            now < (self.effects.lock_flash[1] if self.effects.lock_flash else 0.0),
+            # P23: the lock-delay pulse alternates at 8 Hz while the piece
+            # rests; quantized so only the phase flip makes the frame dirty.
+            int(now * 8) % 2
+            if (
+                self.engine.grounded
+                and not self.engine.game_over
+                and not self.engine.frozen
+                and not self.engine.paused
+                and self.menu is None
+            )
+            else 0,
             self.menu, self.menu_cursor, self.typed_name, self.name_awaiting,  # modal content
             self.new_best, self.rank, self._live_new_best(),
             self.state.settings.ghost, self.state.settings.hold,
@@ -762,9 +786,27 @@ class Session:
         # drop or a big clear.
         ox, oy = self.effects.shake(now)
 
+        # P22: the just-locked cells, while the flash window is open.
+        lock_cells = (
+            self.effects.lock_flash[0]
+            if self.effects.lock_flash is not None
+            and now < self.effects.lock_flash[1]
+            else None
+        )
+        # P23: dim half of the 8 Hz pulse while the piece rests (the lock
+        # delay is ticking).
+        pulse_dim = (
+            not self.engine.game_over
+            and not self.engine.frozen
+            and not self.engine.paused
+            and self.engine.grounded
+            and int(now * 8) % 2 == 1
+        )
+
         draw_board(
             stdscr, self.engine, bx + ox, by + oy,
             show_ghost=self.state.settings.ghost, hide_live=glide_frac is not None,
+            lock_cells=lock_cells, pulse_dim=pulse_dim,
         )
 
         # Floating score text, drifting up out of the board.

@@ -368,6 +368,35 @@ class TestDropping:
         t.pending_clears = [BOARD_H - 1]
         assert t.hard_drop() == 0
 
+    def test_last_lock_records_hard_drop_cells(self) -> None:
+        """P22: a no-clear hard drop records the locked cells so the UI
+        can flash them — the recorded cells are exactly the piece's
+        actual footprint after the drop."""
+        t = Tetris()
+        assert t.last_lock is None
+        before = [(x, y) for x, y in t.piece.cells() if y >= 0]
+        dist = t.hard_drop()
+        assert dist > 0
+        assert t.last_lock is not None
+        assert sorted(t.last_lock) == sorted((x, y + dist) for x, y in before)
+        for x, y in t.last_lock:
+            assert t.board.occupied(x, y)
+
+    def test_last_lock_none_when_lock_clears_lines(self) -> None:
+        """P22: a lock that clears lines keeps last_lock None — the
+        line-clear flash is the effect there, not the lock flash."""
+        t = Tetris()
+        t.piece = Piece("O", 4, BOARD_H - 2)
+        for x in range(BOARD_W):
+            if x not in (4, 5):
+                t.board.set_cell(x, BOARD_H - 1, "J")
+                t.board.set_cell(x, BOARD_H - 2, "J")
+        t.tick(1.0)  # the resting piece registers as grounded
+        t.tick(1.6)  # lock delay elapses: the locking lock clears two rows
+        assert t.pieces == 1
+        assert t.last_lock is None
+        assert t.pending_clears == [BOARD_H - 2, BOARD_H - 1]
+
     def test_ghost_y_at_or_below_piece(self, game_state: Tetris) -> None:
         assert game_state.ghost_y() >= game_state.piece.y
 
@@ -807,6 +836,19 @@ class TestLockDelay:
         assert t.pieces == 0
         t.tick(2.0)
         assert t.pieces == 1
+
+    def test_grounded_property(self) -> None:
+        """P23: the UI's lock-delay pulse is driven by engine.grounded —
+        False in flight, True once the piece rests, False again after the
+        replacement piece spawns."""
+        t = Tetris()
+        assert not t.grounded
+        t.piece = Piece("O", 4, BOARD_H - 2)
+        assert not t.grounded  # the flag is per-tick, not per-piece
+        t.tick(1.0)
+        assert t.grounded
+        t.tick(1.6)  # locks; the replacement piece spawns in flight
+        assert not t.grounded
 
     def test_rotate_180_refreshes_lock_timer(self) -> None:
         t = Tetris()
