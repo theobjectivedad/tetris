@@ -484,4 +484,26 @@ the live NEW BEST indicator — keeps the MCP stats contract untouched).
 
 ### Progress log
 
-(Phase 2 entries appended as milestones land.)
+- [x] **P16+P17** Level-up feedback (LEVEL UP event, floater, double beep) +
+      big-clear board shake (0.2 s on tetris/full T-spin, shake setting
+      respected via Effects.shake_on). — merged de6ab96
+- [x] **P14** Soft-drop streaming: holding ↓ drops at 20 cells/s
+      (SOFT_DROP_RATE); OS auto-repeats swallowed via HOLD_WINDOW hold
+      tracking; one S token per authorized drop (replay-identical). — merged
+      2cb3dac
+- [x] **P15** a/d as left/right (same DAS/ARR path + L/R replay tokens);
+      two-column help legend. — merged 49cf299
+- [x] **P18** Replay speed: F cycles 1×/2×/4×; virtual-time accumulator
+      (replay_vt) so mid-replay speed changes don't jump the timeline;
+      "REPLAY 2x" tag; scene key carries the speed. — merged 7f2d08d
+- [x] **P19** Replay list: L at game over (GameState.replays() newest
+      first, wall-clock date on saved replays, build_replays_modal), 1–5
+      plays (start_replay index); ESC branch closes any open menu before
+      the game-over reset. — merged db6bcef
+- [x] **P20** Live NEW BEST indicator (best_at_start + _live_new_best;
+      excluded for sprint). — merged 5c1286e
+- [x] **P21** High-scores TIME column (M:SS; em dash for legacy entries).
+      — merged 5c1286e
+
+**All 8 Phase 2 items (P14–P21) are complete.** Final gate: `just check`
+green (ruff + mypy --strict), 297 pytest tests passing.

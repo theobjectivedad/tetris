@@ -21,11 +21,11 @@ Or directly: `uv run python -m tetris.main`
 
 | Key      | Action                                                                 |
 |----------|------------------------------------------------------------------------|
-| ← / →    | Move (DAS/ARR auto-repeat when held)                                   |
+| ← / → / a / d | Move (DAS/ARR auto-repeat when held)                               |
 | ↑        | Rotate clockwise                                                       |
 | Z        | Rotate counter-clockwise                                               |
 | X        | Rotate 180° (J/L/S/Z/T pieces)                                         |
-| ↓        | Soft drop (+1 pt/cell)                                                 |
+| ↓        | Soft drop (+1 pt/cell); hold it to stream at 20 cells/s                |
 | SPACE    | Hard drop (+2 pts/cell)                                                |
 | C        | Hold piece                                                             |
 | P        | Pause                                                                  |
@@ -37,6 +37,8 @@ Or directly: `uv run python -m tetris.main`
 | ESC      | Close dialog / pause / unpause; at game over: new game without saving  |
 | ENTER    | At game over (top-10 score): save the typed name and start a new game  |
 | G        | Replay the last saved game (at game over)                              |
+| L        | Replay list at game over (1–5 plays a saved replay)                    |
+| F        | While a replay is running: cycle replay speed 1×/2×/4×                 |
 
 ## Features
 
@@ -45,12 +47,16 @@ Or directly: `uv run python -m tetris.main`
 - **Game modes** — classic (endless) and **sprint** (clear 10 lines before
   the 180 s clock runs out; the best sprint time is saved separately and never
   touches the score table)
-- **Replays** — every game is seeded; the input log is saved and `G` at game
-  over replays the last run at 1× speed
+- **Replays** — every game is seeded; the input log is saved and at game over
+  `G` replays the last run while `L` opens a list of the five most recent
+  saved runs (score, lines, mode, date) that `1`–`5` plays. During a replay,
+  `F` cycles the speed 1×/2×/4× and ESC aborts
 - **Color themes** — classic, mono, and vivid palettes (switch live from the
   settings menu)
 - **DAS/ARR tuning** — held-key delay and auto-repeat rate are adjustable in
-  settings
+  settings; the down key streams at a fixed 20 cells/s while held (the
+  terminal's own auto-repeat is swallowed, so soft drop feels the same at any
+  OS repeat rate)
 - **7-bag randomizer** — fair piece distribution
 - **5-piece next queue** — the NEXT box shows all five (head bright, rest
   dim), **hold piece** (C), **ghost piece** (piece-colored)
@@ -60,16 +66,22 @@ Or directly: `uv run python -m tetris.main`
 - **T-spins**: corner-rule detection with mini/full distinction, T-spin
   scoring (100/400 with no lines, 200/800/1200/1600 by lines cleared, all
   × level), counted in the SPINS stat
+- **Level-up feedback** — a floating "LEVEL UP" and a double beep mark the
+  moment gravity speeds up
 - **Line-clear flash animation**, floating score popups ("TETRIS +800",
-  "T-SPIN +1200", …), T-spin corner flash, board shake on hard drops,
-  terminal beeps (1 per clear, 2 for Tetris or T-spin mini, 3 for a full
-  T-spin) — sound and shake toggle in settings
+  "T-SPIN +1200", …), T-spin corner flash, board shake on hard drops **and**
+  on Tetris / full T-spin clears, terminal beeps (1 per clear, 2 for Tetris,
+  T-spin mini or a level-up, 3 for a full T-spin) — sound and shake toggle in
+  settings
+- **Live NEW BEST indicator** — the stats panel flags the moment your score
+  passes the board's previous top score, so you know you're chasing a record
+  mid-game
 - **Modern scoring**: 100/300/500/800 × level, **combos** (+50 × combo ×
   level), **back-to-back** bonus (1.5×) for Tetris and T-spin multi-line
   clears, soft/hard drop points
-- **High scores** — top 10 with names, persisted together with the settings
-  in the unified `~/.local/share/terminal-tetris/state.json` (override with
-  `$TETRIS_SCORES`)
+- **High scores** — top 10 with names, score, level, play time, and date,
+  persisted together with the settings in the unified
+  `~/.local/share/terminal-tetris/state.json` (override with `$TETRIS_SCORES`)
 - **Game-over stats** — score, lines, level, pieces, game time, best combo,
   and high-score rank (or the best score); the game's piece seed is shown so
   the run can be replayed
@@ -101,16 +113,19 @@ Or directly: `uv run python -m tetris.main`
 - `src/tetris/main.py` — curses entry point + 50 fps frame loop
 - `src/tetris/mcp/` — MCP play-test server (pty + pyte mirror, run with
   `just mcp` — see `src/tetris/mcp/README.md`)
-- `tests/` — 277 pytest tests (262 test functions; some parametrized)
+- `tests/` — 297 pytest tests (282 test functions; some parametrized)
 
 ## Roadmap
 
 The improvement plan ([IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md)) is fully
-shipped: 180° rotation, sprint mode, themes, replays, session stats (game
-time + best combo), DAS/ARR tuning, drift-corrected 50 fps pacing, and a CI
-workflow are all in. Deliberate non-goals (local 2-player multiplayer, CPU
-micro-optimization of the render path, exotic-terminal acrobatics) are
-documented in the plan.
+shipped. Phase 1 (P1–P13): 180° rotation, sprint mode, themes, replays,
+session stats (game time + best combo), DAS/ARR tuning, drift-corrected 50
+fps pacing, and a CI workflow. Phase 2 (P14–P21): soft-drop streaming,
+a/d movement keys, level-up feedback, big-clear board shake, replay speed
+(1×/2×/4×), the replay list, the live NEW BEST indicator, and the high-
+score TIME column. Deliberate non-goals (local 2-player multiplayer,
+CPU micro-optimization of the render path, exotic-terminal acrobatics, the
+guideline gravity curve) are documented in the plan.
 
 > **Internal API note:** the `tetris.game` facade and the `tetris.scores`
 > shim have been removed. Import from the real modules instead
