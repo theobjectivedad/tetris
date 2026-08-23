@@ -341,7 +341,7 @@ class Session:
 
         1. read one logical key (replays only respond to ESC),
         2. dispatch it — name entry, menus, game-over, play input,
-        3. stream held-direction moves (DAS/ARR),
+        3. stream held input (DAS/ARR moves + soft-drop stream),
         4. step the engine (or the replay),
         5. apply the engine's effects (floaters, beeps, spin flash),
         6. record a finished game (high score, sprint best, replay),
@@ -355,7 +355,7 @@ class Session:
         key = self._read_key(stdscr, now)
         if self._dispatch_key(key, now):
             return True
-        self._stream_held_direction(now)
+        self._stream_held_input(now)
         self._step_engine(now)
         self._apply_effects(now)
         self._record_finished_game()
@@ -473,8 +473,12 @@ class Session:
                     self.log_action("X")
                     self.engine.rotate_180(now)
             elif key == curses.KEY_DOWN:
-                self.log_action("S")
-                self.engine.soft_drop()
+                # P14: one cell per fresh press; while held, the stream in
+                # _stream_held_input drops at the fixed SOFT_DROP_RATE
+                # cadence (OS auto-repeats are swallowed here).
+                if self.reader.on_soft_drop(now):
+                    self.log_action("S")
+                    self.engine.soft_drop()
             elif key == ord(" "):
                 self.log_action("H")
                 if self.engine.hard_drop() > 0 and self.state.settings.shake:
@@ -488,13 +492,17 @@ class Session:
 
     # -- simulation ------------------------------------------------------
 
-    def _stream_held_direction(self, now: float) -> None:
-        """DAS/ARR streaming: held-key moves without new key events."""
+    def _stream_held_input(self, now: float) -> None:
+        """DAS/ARR streaming: held-key moves and soft drops without new
+        key events (P14)."""
         if self.menu is None and not self.engine.paused and not self.engine.game_over:
             auto = self.reader.auto_direction(now)
             if auto:
                 self.log_action("L" if auto < 0 else "R")
                 self.engine.move(auto, now)
+            if self.reader.auto_soft_drop(now):
+                self.log_action("S")
+                self.engine.soft_drop()
 
     def _step_engine(self, now: float) -> None:
         """Gravity + lock delay — or one replay step while re-running."""

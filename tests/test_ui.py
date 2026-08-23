@@ -613,6 +613,94 @@ def test_das_hold_drives_piece_to_left_wall(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Soft-drop streaming (P14)
+# ---------------------------------------------------------------------------
+
+
+def test_soft_drop_tap_is_one_cell_plus_bounded_tail() -> None:
+    """A clean tap of down drops exactly one cell immediately, plus at
+    most one stream step before the hold window expires (mirrors the
+    direction keys' bounded tail)."""
+    from tetris.ui_input import KeyReader
+
+    r = KeyReader()
+    assert r.on_soft_drop(1.0)  # fresh press: immediate drop
+    steps = [t for t in (1.02, 1.04, 1.05, 1.06, 1.08, 1.10) if r.auto_soft_drop(t)]
+    assert steps == [1.05]  # one tail step, then the hold window expires
+
+
+def test_soft_drop_hold_streams_at_20_cells_per_second() -> None:
+    """Holding down (press + OS auto-repeat every 35 ms) drops at the
+    fixed SOFT_DROP_RATE cadence, NOT at the OS repeat rate: no repeat
+    event moves the piece directly, and stream steps are spaced at the
+    stream cadence."""
+    from tetris.ui_input import KeyReader
+
+    r = KeyReader()
+    assert r.on_soft_drop(1.0)  # press
+    # OS auto-repeat events every 35 ms — each must be swallowed...
+    for t in (1.035, 1.07, 1.105, 1.14, 1.175, 1.21, 1.245):
+        assert not r.on_soft_drop(t)
+    # ...while the stream owns the cadence (20 cells/s while held).
+    grid = [round(1.0 + i * 0.01, 2) for i in range(1, 31)]
+    steps = [t for t in grid if r.auto_soft_drop(t)]
+    assert len(steps) >= 5  # ~300 ms of hold -> ~6 stream steps
+    for a, b in pairwise(steps):
+        assert b - a >= 0.049  # stream cadence, not the 35 ms event rate
+
+
+def test_soft_drop_new_press_after_release_drops_immediately() -> None:
+    """A press after the hold window has expired is a fresh press:
+    immediate drop again (no DAS-style wait for the down key)."""
+    from tetris.ui_input import KeyReader
+
+    r = KeyReader()
+    assert r.on_soft_drop(1.0)
+    assert not r.on_soft_drop(1.03)  # still the same hold
+    assert r.on_soft_drop(1.2)  # 0.17 s later: fresh press
+
+
+def test_soft_drop_reset_clears_hold() -> None:
+    """A menu round-trip (reader.reset) kills any in-flight down hold so
+    stale repeats can't leak a stream into the next scene."""
+    from tetris.ui_input import KeyReader
+
+    r = KeyReader()
+    assert r.on_soft_drop(1.0)
+    assert r.on_soft_drop(1.03) is False
+    r.reset()
+    assert not r.auto_soft_drop(1.1)  # hold is dead after reset
+    assert r.on_soft_drop(1.2)  # next press is fresh again
+
+
+def test_soft_drop_streaming_via_game_loop(monkeypatch) -> None:
+    """P14 end-to-end: holding down (press + simulated OS auto-repeat at
+    35 ms) produces drops spaced at the stream cadence (~50 ms), never
+    at the event cadence (35 ms) — the OS repeats are swallowed and the
+    stream drives the piece."""
+    monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_softdrop.json")
+    calls: list[float] = []
+
+    class CountingSoftDrop(main.Tetris):
+        def soft_drop(self) -> bool:
+            calls.append(fake_time.now)
+            return super().soft_drop()
+
+    monkeypatch.setattr(main, "Tetris", CountingSoftDrop)
+    events = [(0.5 + i * 0.035, curses.KEY_DOWN) for i in range(12)]  # 0.5..0.885
+    run_game(events=events, duration=2.0)
+
+    assert calls, "no soft drops recorded"
+    assert _near(calls[0], 0.5), "first drop must be the immediate tap"
+    # Stream cadence: every drop after the tap is >= ~SOFT_DROP_RATE apart;
+    # had the OS repeats moved the piece, some pair would be 35 ms apart.
+    for a, b in pairwise(calls[1:]):
+        assert b - a >= 0.045
+    # The hold streamed ~400 ms of input -> ~8-10 drops total.
+    assert 8 <= len(calls) <= 11
+
+
+# ---------------------------------------------------------------------------
 # Pause menu
 # ---------------------------------------------------------------------------
 

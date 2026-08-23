@@ -3,8 +3,8 @@
 Owns the stateful bits of key input that were previously locals in
 ``tetris.main.game_loop``: the ``KeyReader`` (reassembling arrow-key ESC
 sequences that ``nodelay()`` getch can split across reads, and the
-DAS/ARR move/rotate throttles) and the input-timing constants that tune
-it.
+DAS/ARR move/rotate throttles plus the soft-drop hold stream) and the
+input-timing constants that tune it.
 """
 
 from __future__ import annotations
@@ -19,6 +19,8 @@ from typing import cast
 # (Settings.das/arr, synced into KeyReader each time the menu changes).
 DAS = 0.17           # default delay after the first tap before held-key streaming
 ARR = 0.04           # default auto-repeat rate (min interval between moves)
+SOFT_DROP_RATE = 0.05  # soft-drop stream cadence while down is held:
+                       # 20 cells/s, the guideline soft-drop speed
 HOLD_WINDOW = 0.06  # a dir-key event within this window counts as "still held"
 ROTATE_COOLDOWN = 0.12
 ESC_TTL = 0.06        # how long a partial ESC sequence is kept while reassembling;
@@ -60,6 +62,12 @@ class KeyReader:
         self._dir_since = 0.0      # when the current hold started
         self._last_dir_event = 0.0
         self._last_move = 0.0
+        # Soft-drop hold (P14): the down key is tracked like a direction
+        # key — one immediate cell per fresh press, then a fixed-cadence
+        # stream while held; OS auto-repeats only refresh the hold window.
+        self._down_since = 0.0     # when the current down hold started
+        self._last_down_event = 0.0
+        self._last_soft = 0.0      # when the last streamed soft drop fired
 
     def reset(self) -> None:
         # Restart/menu resets the move throttle, any in-flight hold, and
@@ -68,6 +76,8 @@ class KeyReader:
         self._last_move = 0.0
         self._dir = 0
         self._esc_seq = []
+        self._down_since = 0.0
+        self._last_soft = 0.0
 
     def next_key(self, stdscr: curses.window, now: float) -> int:
         """Return the next logical key, or -1 if no input is pending.
@@ -159,6 +169,44 @@ class KeyReader:
             return True
         return False
 
+    # -- soft drop (P14) -------------------------------------------------
+
+    def on_soft_drop(self, now: float) -> bool:
+        """Handle a down-key event; True when the piece drops one cell.
+
+        A fresh press (or a press after the hold window has expired) drops
+        immediately and opens the hold. Repeats arriving within
+        HOLD_WINDOW are the terminal/OS acknowledging the held key: they
+        refresh the hold window but do NOT move the piece themselves —
+        while the hold is live the cadence is owned by ``auto_soft_drop``
+        at the fixed SOFT_DROP_RATE (20 cells/s, guideline soft-drop
+        speed) instead of the OS repeat rate, whose ~500 ms first-repeat
+        dead time is what made holding down feel dead.
+        """
+        if self._down_since == 0.0 or now - self._last_down_event > HOLD_WINDOW:
+            self._down_since = now
+            self._last_down_event = now
+            self._last_soft = now
+            return True
+        self._last_down_event = now  # still held: swallow the repeat
+        return False
+
+    def auto_soft_drop(self, now: float) -> bool:
+        """True when the held down key should stream one more soft drop.
+
+        Mirrors the direction keys' hold tracking: "held" means a down-key
+        event arrived within HOLD_WINDOW (there is no key-release event,
+        so the window bounds the tail), and the drop cadence is
+        SOFT_DROP_RATE regardless of the OS repeat rate. The engine
+        no-ops at the floor — the lock delay decides the rest.
+        """
+        if self._down_since == 0.0 or now - self._last_down_event > HOLD_WINDOW:
+            return False
+        if now - self._last_soft < SOFT_DROP_RATE:
+            return False
+        self._last_soft = now
+        return True
+
 
 __all__ = [
     "ARR",
@@ -168,5 +216,6 @@ __all__ = [
     "HOLD_WINDOW",
     "KEY_ESCAPE",
     "ROTATE_COOLDOWN",
+    "SOFT_DROP_RATE",
     "KeyReader",
 ]
