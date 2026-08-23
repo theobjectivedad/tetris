@@ -204,13 +204,12 @@ def build_help_modal() -> Modal:
     """
     separator = "─" * 32
     lines = [
-        "←/→ move        SPACE hard drop",
-        "↑ rotate CW     Z rotate CCW",
-        "X rotate 180",
+        "←/a →/d move    SPACE hard drop",
+        "↑ CW  Z CCW     X rotate 180",
         "↓ soft drop     C hold",
-        "P pause         S settings",
-        "H scores        ? help",
-        "R restart       Q quit",
+        "P pause         ? help",
+        "R restart       S settings",
+        "H scores        Q quit",
         "ESC close / pause",
         "GAME OVER: ENTER save, ESC skip",
         separator,

@@ -63,6 +63,8 @@ KEYS: dict[str, bytes] = {
     "escape": b"\x1b",
     "enter": b"\r",
     "space": b" ",
+    "a": b"a",
+    "d": b"d",
     "c": b"c",
     "h": b"h",
     "p": b"p",
@@ -256,7 +258,7 @@ def tetris_start(width: int = 60, height: int = 30) -> str:
         return status
     return (
         f"game running (pid {sess.pid}) in a {width}×{height} virtual terminal.\n"
-        "Keys: left/right move, up/Z rotate, X 180°, down soft drop, space hard drop, "
+        "Keys: left/right (or a/d) move, up/Z rotate, X 180°, down soft drop (hold to stream), space hard drop, "
         "c hold, p pause, ? help, h high scores, s settings, "
         "escape close/pause (at game over: new game, no save), "
         "enter commit name + new game at game over, r restart, q quit, "

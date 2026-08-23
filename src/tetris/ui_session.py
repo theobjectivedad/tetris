@@ -454,8 +454,10 @@ class Session:
                     init_colors(self.state.settings.theme)
                     build_attrs()
         elif self.menu is None and not self.engine.paused and not self.engine.game_over:
-            if key in (curses.KEY_LEFT, curses.KEY_RIGHT):
-                d = -1 if key == curses.KEY_LEFT else 1
+            if key in (curses.KEY_LEFT, ord("a"), ord("A"), curses.KEY_RIGHT, ord("d"), ord("D")):
+                # a/d are the home-row aliases for the arrow keys (P15);
+                # same DAS/ARR path and L/R replay tokens as the arrows.
+                d = -1 if key in (curses.KEY_LEFT, ord("a"), ord("A")) else 1
                 # One move per fresh press; holding streams at ARR after DAS.
                 if self.reader.on_direction(d, now):
                     self.log_action("L" if d < 0 else "R")

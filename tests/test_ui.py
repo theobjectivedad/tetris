@@ -701,6 +701,48 @@ def test_soft_drop_streaming_via_game_loop(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
+# a/d alternate movement keys (P15)
+# ---------------------------------------------------------------------------
+
+
+def test_a_d_keys_move_piece_like_arrows(monkeypatch) -> None:
+    """P15: a/d are home-row aliases for left/right — a single tap of each
+    moves the piece exactly one cell, same as the arrow keys."""
+    monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_ad.json")
+
+    base = run_game(events=[])
+    base_cols = piece_cols(base)
+    assert base_cols, "piece not found on screen"
+
+    left = run_game(events=[(0.5, ord("a"))])
+    assert piece_cols(left) == {c - 1 for c in base_cols}
+
+    right = run_game(events=[(0.5, ord("d"))])
+    assert piece_cols(right) == {c + 1 for c in base_cols}
+
+    # Uppercase works too (keypad-off terminals may deliver shifted keys).
+    right_upper = run_game(events=[(0.5, ord("D"))])
+    assert piece_cols(right_upper) == {c + 1 for c in base_cols}
+
+
+def test_held_a_streams_like_held_left(monkeypatch) -> None:
+    """P15: holding a streams through the same DAS/ARR path as holding
+    the left arrow (repeats + streaming push the piece to the wall)."""
+    monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_ad.json")
+    seen = []
+
+    class WatchTetris(main.Tetris):
+        def __init__(self, rng: random.Random | None = None, start_level: int = 1, sprint: bool = False) -> None:
+            super().__init__(rng=rng, start_level=start_level, sprint=sprint)
+            seen.append(self)
+
+    monkeypatch.setattr(main, "Tetris", WatchTetris)
+    events = [(0.5 + i * 0.035, ord("a")) for i in range(15)]  # 0.5..0.98
+    run_game(events=events, duration=2.0)
+    assert seen[-1].piece.x == 0  # same as the held-LEFT wall test
+
+
+# ---------------------------------------------------------------------------
 # Pause menu
 # ---------------------------------------------------------------------------
 
