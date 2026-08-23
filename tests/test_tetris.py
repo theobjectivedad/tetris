@@ -606,6 +606,34 @@ class TestLeveling:
         assert t.drop_interval < 0.5
         assert t.drop_interval >= 0.05
 
+    def test_level_up_event_on_level_change(self) -> None:
+        """P16: crossing a level boundary emits a LEVEL UP event (the UI
+        floats it mid-board and beeps); one event per boundary only."""
+        t = Tetris()
+        for _ in range(9):
+            fill_row(t, BOARD_H - 1)
+            t.pending_clears = [BOARD_H - 1]
+            t._commit_clears()
+        t.events.clear()
+        fill_row(t, BOARD_H - 1)
+        t.pending_clears = [BOARD_H - 1]
+        t._commit_clears()
+        assert t.level == 2
+        ups = [ev for ev in t.events if ev.kind == "levelup"]
+        assert len(ups) == 1
+        assert ups[0].text == "LEVEL UP"
+        assert ups[0].row == BOARD_H // 2
+        assert ups[0].center is None
+
+    def test_no_level_up_event_below_level_boundary(self) -> None:
+        t = Tetris()
+        for _ in range(3):
+            fill_row(t, BOARD_H - 1)
+            t.pending_clears = [BOARD_H - 1]
+            t._commit_clears()
+        assert t.level == 1
+        assert not any(ev.kind == "levelup" for ev in t.events)
+
 
 # ---------------------------------------------------------------------------
 # Start level

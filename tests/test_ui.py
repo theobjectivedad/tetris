@@ -247,6 +247,62 @@ def test_score_popup_renders_after_line_clear(monkeypatch) -> None:
     assert "SINGLE" in grid_to_text(scr)
 
 
+def test_level_up_floater_renders_after_level_change(monkeypatch):
+    """P16: a clear that raises the level floats "LEVEL UP" on the board
+    (rig: 9 lines banked, one more single clear -> level 2)."""
+    monkeypatch.setenv("TETRIS_SCORES", "/tmp/test_tetris_ui_levelup.json")
+
+    class RiggedTetris(main.Tetris):
+        def __init__(self, rng: random.Random | None = None, start_level: int = 1, sprint: bool = False) -> None:
+            super().__init__(rng=rng, start_level=start_level, sprint=sprint)
+            self.board[BOARD_H - 1] = ["J"] * 4 + ["", ""] + ["J"] * 5
+            self.lines = 9
+            self.piece = Piece("O", 4, 0)
+
+    monkeypatch.setattr(main, "Tetris", RiggedTetris)
+    scr = run_game(events=[(0.2, ord(" "))], duration=1.2)
+
+    assert "LEVEL UP" in grid_to_text(scr)
+
+
+# ---------------------------------------------------------------------------
+# P17: big-clear board shake
+# ---------------------------------------------------------------------------
+
+
+def test_big_clear_shakes_board_for_200ms(monkeypatch):
+    """P17: a tetris event shakes the board for BIG_SHAKE_SECONDS (0.2 s)
+    when the shake setting is on; with the setting off, no shake. The
+    shake channel is the same one a hard drop uses (effects.shake_until)."""
+    from tetris.engine import Event
+    from tetris.ui_session import BIG_SHAKE_SECONDS, Effects
+
+    random.seed(42)  # Effects.shake jitters via the global RNG
+    e = Effects()
+    e.sound = False  # no beeps in the test
+    e.shake_on = True
+    e.on_events([Event("TETRIS +800", "tetris", 19)], 1.0)
+    assert e.shake_until == 1.0 + BIG_SHAKE_SECONDS
+    assert e.shake(1.05) != (0, 0)  # jitting while active
+    assert e.shake(1.0 + BIG_SHAKE_SECONDS) == (0, 0)
+
+    e2 = Effects()
+    e2.sound = False
+    e2.shake_on = False
+    e2.on_events([Event("TETRIS +800", "tetris", 19)], 1.0)
+    assert e2.shake_until == 0.0  # shake setting respected
+
+    # A full T-spin also shakes; a plain single does not.
+    e3 = Effects()
+    e3.sound = False
+    e3.on_events([Event("T-SPIN +400", "tspin", 15, center=(4, 14))], 2.0)
+    assert e3.shake_until == 2.0 + BIG_SHAKE_SECONDS
+    e4 = Effects()
+    e4.sound = False
+    e4.on_events([Event("SINGLE +100", "clear", 19)], 3.0)
+    assert e4.shake_until == 0.0
+
+
 def test_split_esc_sequence_reassembles_into_arrow_key(monkeypatch) -> None:
     """With nodelay() getch can return a bare ESC when the 3-byte arrow
     sequence (ESC [ C) is split across reads; the stray 'C' byte must not

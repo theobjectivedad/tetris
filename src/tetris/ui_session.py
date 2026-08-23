@@ -47,9 +47,12 @@ from .ui_render import (
 SPAWN_ANIM_SECONDS = 0.15
 # how long the T-spin corner flash stays on screen
 SPIN_FLASH_SECONDS = 0.6
+# how long the board shakes after a big clear (P17: tetris / full T-spin);
+# a hard-drop shake is shorter (0.12 s, set in _dispatch_key)
+BIG_SHAKE_SECONDS = 0.2
 
 # Beeps per effect kind.
-_BEEPS = {"clear": 1, "tetris": 2, "tspin": 3, "tspin-mini": 2}
+_BEEPS = {"clear": 1, "tetris": 2, "tspin": 3, "tspin-mini": 2, "levelup": 2}
 
 
 class Effects:
@@ -61,6 +64,7 @@ class Effects:
         self.shake_until = 0.0
         self.spin_flash: tuple[tuple[int, int], float] | None = None
         self.sound = True  # gated per frame from the user's sound setting
+        self.shake_on = True  # gated per frame from the user's shake setting
 
     def clear(self) -> None:
         self.floaters.clear()
@@ -72,6 +76,10 @@ class Effects:
             self.floaters.append((ev.text, ev.row, now))
             if ev.kind in ("tspin", "tspin-mini") and ev.center is not None:
                 self.spin_flash = (ev.center, now)
+            if ev.kind in ("tetris", "tspin") and self.shake_on:
+                # P17: big clears shake the board, the same channel a hard
+                # drop uses (0.12 s), but longer and stronger-feeling.
+                self.shake_until = max(self.shake_until, now + BIG_SHAKE_SECONDS)
             if self.sound:
                 for _ in range(_BEEPS[ev.kind]):
                     try:
@@ -498,8 +506,10 @@ class Session:
             self.engine.advance_flash()
 
     def _apply_effects(self, now: float) -> None:
-        """Consume the engine's events: floating text, spin flash, beeps."""
+        """Consume the engine's events: floating text, spin flash, beeps,
+        and the big-clear shake."""
         self.effects.sound = self.state.settings.sound
+        self.effects.shake_on = self.state.settings.shake
         self.effects.on_events(self.engine.events, now)
 
     # -- game-over bookkeeping --------------------------------------------

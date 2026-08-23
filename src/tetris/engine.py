@@ -49,9 +49,11 @@ class Event:
     """A UI effect the game requests: floating score text, corner flash, beeps.
 
     ``kind`` shares its vocabulary with ``scoring.ScoreBreakdown.kind``
-    ("clear" | "tetris" | "tspin" | "tspin-mini") and drives the UI's beeps
-    and the T-spin corner flash; ``row`` is the board row the floating text
-    rises from; ``center`` is the T-spin center (the corner-flash anchor).
+    ("clear" | "tetris" | "tspin" | "tspin-mini"), plus "levelup" for the
+    milestone when a line clear raises the level; the kind drives the UI's
+    beeps, the T-spin corner flash, and the big-clear board shake. ``row``
+    is the board row the floating text rises from; ``center`` is the
+    T-spin center (the corner-flash anchor).
     """
 
     text: str
@@ -443,7 +445,12 @@ class Tetris:
         self.b2b = bd.b2b_after
         self.score += bd.points
         self.lines += count
+        old_level = self.level
         self.level = self.lines // 10 + 1
+        if self.level > old_level:
+            # Milestone feedback (P16): the UI floats "LEVEL UP" and beeps;
+            # the drop interval below makes the change visible in play.
+            self.events.append(Event(text="LEVEL UP", kind="levelup", row=BOARD_H // 2))
         self.drop_interval = self._drop_interval_for(self.level)
 
         self.events.append(

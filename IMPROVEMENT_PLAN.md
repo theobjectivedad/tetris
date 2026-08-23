@@ -453,3 +453,35 @@ Acceptance: no references to `tetris.scores` or `tetris.game` in
 - **MCP `tetris_start` docstring / `KEYS`** must list new keys (`x`, `g`) and
   the server must be restarted to pick up `KEYS` changes (long-lived uvx
   process); game-code changes are picked up on the next `tetris_start`.
+
+---
+
+## Phase 2 — P14–P21: feel, juice, and replay value (2026-08-21)
+
+> **GOAL (verbatim from owner):** "come up with more ways to improve tetris.
+> think hard about big impact items and implement them."
+>
+> Every P14–P21 item below must be implemented, quality-gated
+> (`just check` + `uv run pytest`), and MCP play-tested. Global rules from
+> the original plan (contracts, purity, MCP parser, commit policy) apply
+> unchanged.
+
+| Item | Improvement | Why big impact |
+|---|---|---|
+| P14 | Soft-drop streaming: holding ↓ drops 20 cells/s (guideline), OS auto-repeat swallowed | The terminal's ~500 ms first-repeat delay made soft drop feel dead; left/right already got custom DAS/ARR, down did not |
+| P15 | `a`/`d` as left/right | Home-row players don't have to leave the keyboard center |
+| P16 | Level-up feedback: `LEVEL UP` floater + beep | Level-ups were silent — a key motivational beat was missing |
+| P17 | Board shake (0.2 s) on Tetris / full T-spin (shake setting respected) | Big clears now match the impact they score |
+| P18 | Replay speed: `F` cycles 1×/2×/4× | Replays were only watchable at 1× |
+| P19 | Replay list: `L` at game over lists the 5 saved replays (score/lines/mode/date), `1`–`5` plays one | Only the last replay was reachable |
+| P20 | Live `★ NEW BEST ★` the moment the score passes the pre-game best | Player learns they're chasing a record mid-game |
+| P21 | `TIME` column in the high-scores table | Time was persisted on every entry but never shown |
+
+Explicit Phase 2 non-goals (considered, rejected): guideline gravity curve
+(it would halve the early-game speed and change the game's character),
+local multiplayer (standing non-goal), best-score panel row (replaced by
+the live NEW BEST indicator — keeps the MCP stats contract untouched).
+
+### Progress log
+
+(Phase 2 entries appended as milestones land.)
