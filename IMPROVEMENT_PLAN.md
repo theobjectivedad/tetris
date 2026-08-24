@@ -560,4 +560,30 @@ endgame tension, hold and rotation are silent.
 
 ### Progress log
 
-(Phase 3 entries appended as milestones land.)
+- [x] **P22+P23** Landing feel: lock flash (engine `last_lock`, 0.12 s
+      highlight accent via the new `HILITE_ATTR` cache with a bold
+      monochrome fallback) + lock-delay pulse (engine `grounded`
+      property, 8 Hz quantized scene-key term). — merged c2c1f52
+- [x] **P24+P25** Danger zone (`stack_top` vs `DANGER_TOP_ROWS=4`,
+      blinking white-on-red top border via fixed pair 13) + combo/B2B
+      feedback ("COMBO ×N"/"B2B" floaters, glowing B2B stat, additive
+      `Event.lines` field so no-line T-spins never earn the tag). —
+      merged 6d9be65
+- [x] **P26+P27** Sound moments: timestamped beep queue in Effects
+      (`pattern`/`pump`, sound-gated) — game-over sting (slow
+      descending 3-beep; brisk rising on a sprint clear; the flip
+      detector stands down while a replay runs) + new-best jingle
+      ("NEW BEST!" center floater + brisk 3-beep, once per game). —
+      merged 17ec2c4
+- [x] **P28+P29** Sprint urgency (danger-colored TIME at ≤ 10 s on top
+      of the ≤ 30 s blink; 1 Hz tick beep on each boundary during the
+      final 5 s) + hold flash (accepted hold flips `can_hold` and
+      flashes the HOLD box border + preview 0.2 s; `draw_box`/
+      `draw_piece_preview` gain an attr override). Also plumbed the P30
+      rotation-flash window. — merged 5d17793
+- [x] **P30** Rotation flash: successful U/Z/X rotations highlight the
+      piece in the highlight accent for 0.1 s (priority over the pulse);
+      rejected rotations open no window. — merged 19742cc
+
+**All 9 Phase 3 items (P22–P30) are complete.** Final gate: `just check`
+green (ruff + mypy --strict), 323 pytest tests passing.

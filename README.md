@@ -73,6 +73,21 @@ Or directly: `uv run python -m tetris.main`
   on Tetris / full T-spin clears, terminal beeps (1 per clear, 2 for Tetris,
   T-spin mini or a level-up, 3 for a full T-spin) — sound and shake toggle in
   settings
+- **Landing feel** — the just-locked cells flash in the theme highlight
+  color, and a grounded piece pulses while the 0.5 s lock delay ticks,
+  so you can see exactly when it is about to lock
+- **Danger zone** — the board's top border blinks red while the stack
+  nears the ceiling
+- **Combo & B2B feedback** — "COMBO ×N" and "B2B" floaters ride on the
+  score popups during a streak, and the B2B stat glows while the streak
+  is active
+- **Sound moments** — a 3-beep sting ends a finished game (brisk and
+  rising on a sprint clear, slow and descending otherwise), and a
+  "NEW BEST!" jingle fires the instant you pass the board's top score
+- **Sprint urgency** — the timer turns red in the final 10 s and ticks
+  once per second during the last five
+- **Hold & rotation feedback** — the HOLD box flashes when a hold is
+  accepted, and the piece highlights briefly on a successful rotation
 - **Live NEW BEST indicator** — the stats panel flags the moment your score
   passes the board's previous top score, so you know you're chasing a record
   mid-game
@@ -113,7 +128,7 @@ Or directly: `uv run python -m tetris.main`
 - `src/tetris/main.py` — curses entry point + 50 fps frame loop
 - `src/tetris/mcp/` — MCP play-test server (pty + pyte mirror, run with
   `just mcp` — see `src/tetris/mcp/README.md`)
-- `tests/` — 297 pytest tests (282 test functions; some parametrized)
+- `tests/` — 323 pytest tests (308 test functions; some parametrized)
 
 ## Roadmap
 
@@ -123,9 +138,13 @@ session stats (game time + best combo), DAS/ARR tuning, drift-corrected 50
 fps pacing, and a CI workflow. Phase 2 (P14–P21): soft-drop streaming,
 a/d movement keys, level-up feedback, big-clear board shake, replay speed
 (1×/2×/4×), the replay list, the live NEW BEST indicator, and the high-
-score TIME column. Deliberate non-goals (local 2-player multiplayer,
-CPU micro-optimization of the render path, exotic-terminal acrobatics, the
-guideline gravity curve) are documented in the plan.
+score TIME column. Phase 3 (P22–P30), the juice round: lock flash,
+lock-delay pulse, danger zone, combo/B2B feedback, the game-over sting,
+the new-best jingle, sprint urgency, hold flash, and rotation flash.
+Deliberate non-goals (local 2-player multiplayer, CPU micro-optimization
+of the render path, exotic-terminal acrobatics, the guideline gravity
+curve, per-pitch sound design, score count-up) are documented in the
+plan.
 
 > **Internal API note:** the `tetris.game` facade and the `tetris.scores`
 > shim have been removed. Import from the real modules instead
