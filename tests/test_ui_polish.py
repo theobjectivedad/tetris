@@ -1,27 +1,29 @@
-"""UI-polish acceptance tests — the spec for the in-flight ``main.py`` work.
+"""UI-polish acceptance tests — the standing acceptance spec for the
+original UI-polish round.
 
-A colleague is implementing four UI-polish features in ``src/tetris/main.py``
-in parallel with this file:
+This file pins the behavior of the four UI-polish features that landed
+as a spec-and-implementation pass (the original "main.py work", since
+decomposed across ``ui_render`` / ``ui_session`` / ``ui_input``):
 
-* ESC-key modal navigation (close the help/settings/scores modals, pause the
-  game in open play, unpause from the PAUSED modal) — including the
+* ESC-key modal navigation (close the help/settings/scores modals, pause
+  the game in open play, unpause from the PAUSED modal) — including the
   regression that a lone ESC must not swallow the key that follows it.
 * a HIGH SCORES modal (``h`` opens it; the game is paused while it is up;
   lists the top 10 entries).
-* game-over name entry: a top-10 score gets an ``ENTER YOUR NAME:`` prompt in
-  the GAME OVER modal; printable chars append (max 10), Backspace deletes,
-  Enter (or R/Q) commits, and the modal then shows the ranked
+* game-over name entry: a top-10 score gets an ``ENTER YOUR NAME:`` prompt
+  in the GAME OVER modal; printable chars append (max 10), Backspace
+  deletes, Enter (or R/Q) commits, and the modal then shows the ranked
   ``★ #n — NAME ★`` line.
 * aligned modal builders: ``build_scores_modal``, ``build_settings_modal``,
   ``build_help_modal`` and ``build_game_over_modal`` with fixed-width rows.
 
-These tests are the acceptance spec. They intentionally FAIL against the
-current ``main.py`` (ESC is inert, there is no ``h`` key, there is no name
-entry, and the new/changed builders do not exist); they must pass
-unmodified once the implementation lands.
+All four features have shipped; these tests are the standing acceptance
+spec, so any change to modal navigation, name entry, or the builder row
+formats must keep them passing.
 
-The ``build_*`` functions are imported inside the unit tests that need them
-so the game_loop-driven tests still collect while ``main.py`` lacks them.
+The ``build_*`` functions are imported inside the unit tests that need
+them (through the ``tetris.main`` re-exports) so the game_loop-driven
+tests still collect.
 """
 
 import json

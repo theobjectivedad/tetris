@@ -32,16 +32,6 @@ dependencies = [
 # Version is derived from git tags via hatch-vcs (e.g. v1.2.3 -> 1.2.3).
 dynamic = ["version"]
 
-[project.optional-dependencies]
-dev = [
-    "pytest>=9.1.1",
-    "ruff>=0.4",
-    "mypy>=1.10",
-    "pytest-cov>=5",
-    "pytest-watch>=4",
-    "pre-commit>=4.2",
-]
-
 [project.urls]
 Homepage = "https://github.com/theobjectivedad/tetris"
 Repository = "https://github.com/theobjectivedad/tetris"
@@ -50,9 +40,15 @@ Issues = "https://github.com/theobjectivedad/tetris/issues"
 [project.scripts]
 tetris-vt-server = "tetris.mcp.server:main"
 
+# The single source of dev dependencies (R7): installed by a plain
+# `uv sync` (CI and local). Transient, per-recipe tools (pytest-cov,
+# pytest-watch) are intentionally NOT here — the just recipes fetch
+# them ad hoc with `uv run --with`.
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "ruff>=0.4",
+    "mypy>=1.10",
     "pre-commit>=4.2",
 ]
 

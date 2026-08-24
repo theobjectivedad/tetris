@@ -17,10 +17,11 @@ jobs:
           python-version: "3.12"
 
       # mcp + pyte are regular project dependencies (the bundled MCP
-      # play-test server); the dev extra adds ruff, mypy and pytest.
-      # Versions resolve from uv.lock, so this matches the local gate.
+      # play-test server); the dev dependency group adds ruff, mypy and
+      # pytest (uv sync installs default groups). Versions resolve from
+      # uv.lock, so this matches the local gate.
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync
 
       # Quality gate — run the tools directly instead of via `just`
       # (no just dependency in CI). Mirrors `just check` + `just test`.
