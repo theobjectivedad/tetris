@@ -186,11 +186,10 @@ def test_no_danger_bar_on_empty_board(monkeypatch, tmp_path) -> None:
 def test_combo_and_b2b_floaters_on_qualifying_clear(monkeypatch, tmp_path) -> None:
     """A Tetris that continues a combo (post-commit combo >= 2) and carries
     the B2B streak gets the score floater plus 'COMBO ×N' above it and a
-    'B2B' tag below it."""
+    'B2B' tag below it. (R3: the engine stamps the post-commit combo/b2b
+    on the event; the UI reads the event's snapshot.)"""
     s = _session(monkeypatch, tmp_path)
-    s.engine.combo = 3  # post-commit: this clear continued the run
-    s.engine.b2b = True
-    s.engine.events.append(Event("TETRIS +2400", "tetris", 15, lines=4))
+    s.engine.events.append(Event("TETRIS +2400", "tetris", 15, lines=4, combo=3, b2b=True))
     s._apply_effects(2.0)
     floaters = {(tx, row) for tx, row, _ in s.effects.floaters}
     assert ("TETRIS +2400", 15) in floaters
@@ -202,8 +201,9 @@ def test_no_line_spin_keeps_streak_but_shows_no_b2b(monkeypatch, tmp_path) -> No
     """A no-line T-spin (lines=0) leaves the streak untouched but is not a
     B2B-qualifying clear — no B2B tag; the combo is 0, so no COMBO tag."""
     s = _session(monkeypatch, tmp_path)
-    s.engine.b2b = True  # carried over from an earlier Tetris
-    s.engine.events.append(Event("T-SPIN MINI +100", "tspin-mini", 12, lines=0))
+    # b2b carried over from an earlier Tetris (a no-line spin leaves the
+    # streak untouched); the combo is 0 (a no-line lock resets it).
+    s.engine.events.append(Event("T-SPIN MINI +100", "tspin-mini", 12, lines=0, b2b=True))
     s._apply_effects(2.0)
     texts = [tx for tx, _, _ in s.effects.floaters]
     assert "B2B" not in texts
@@ -213,8 +213,7 @@ def test_no_line_spin_keeps_streak_but_shows_no_b2b(monkeypatch, tmp_path) -> No
 def test_two_line_tspin_earns_b2b_tag(monkeypatch, tmp_path) -> None:
     """A 2-line T-spin is B2B-qualifying (like a Tetris)."""
     s = _session(monkeypatch, tmp_path)
-    s.engine.b2b = True
-    s.engine.events.append(Event("T-SPIN +1800", "tspin", 14, lines=2))
+    s.engine.events.append(Event("T-SPIN +1800", "tspin", 14, lines=2, b2b=True))
     s._apply_effects(2.0)
     texts = [tx for tx, _, _ in s.effects.floaters]
     assert "B2B" in texts
@@ -224,13 +223,11 @@ def test_no_combo_floater_until_run_has_two(monkeypatch, tmp_path) -> None:
     """The first clear of a run (post-commit combo 1) shows no COMBO tag;
     the second consecutive clear (combo 2) does."""
     s = _session(monkeypatch, tmp_path)
-    s.engine.combo = 1
-    s.engine.events.append(Event("SINGLE +100", "clear", 17, lines=1))
+    s.engine.events.append(Event("SINGLE +100", "clear", 17, lines=1, combo=1))
     s._apply_effects(2.0)
     assert not any(tx.startswith("COMBO") for tx, _, _ in s.effects.floaters)
 
-    s.engine.events.append(Event("DOUBLE +300", "clear", 16, lines=2))
-    s.engine.combo = 2
+    s.engine.events.append(Event("DOUBLE +300", "clear", 16, lines=2, combo=2))
     s._apply_effects(3.0)
     floaters = {(tx, row) for tx, row, _ in s.effects.floaters}
     assert ("COMBO ×2", 14) in floaters

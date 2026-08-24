@@ -555,6 +555,33 @@ class TestLineClearing:
         t._commit_clears()
         assert t.events and t.events[-1].lines == 1
 
+    def test_clear_event_carries_post_commit_combo_and_b2b(self) -> None:
+        """R3: clear events are stamped with the post-commit combo/b2b so
+        the UI's COMBO/B2B floaters read the event's snapshot, not the
+        engine's live state."""
+        t = Tetris()
+        t.events.clear()
+        fill_row(t, BOARD_H - 1)
+        t.pending_clears = [BOARD_H - 1]
+        t._commit_clears()  # first clear: post-commit combo 1, no B2B
+        assert t.events[-1].combo == 1
+        assert t.events[-1].b2b is False
+
+        fill_row(t, BOARD_H - 1)
+        t.pending_clears = [BOARD_H - 1]
+        t._commit_clears()  # second consecutive clear: combo 2
+        assert t.events[-1].combo == 2
+
+        # A Tetris stamps the newly-active B2B streak.
+        t2 = Tetris()
+        t2.events.clear()
+        for i in range(4):
+            fill_row(t2, BOARD_H - 1 - i)
+        t2.pending_clears = list(range(BOARD_H - 4, BOARD_H))
+        t2._commit_clears()
+        assert t2.events[-1].b2b is True
+        assert t2.events[-1].lines == 4
+
 
 # ---------------------------------------------------------------------------
 # Scoring extras: combos & back-to-back

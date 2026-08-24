@@ -51,7 +51,7 @@ SPAWN_ANIM_SECONDS = 0.15
 # how long the T-spin corner flash stays on screen
 SPIN_FLASH_SECONDS = 0.6
 # how long the board shakes after a big clear (P17: tetris / full T-spin);
-# a hard-drop shake is shorter (0.12 s, set in _dispatch_key)
+# a hard-drop shake is shorter (0.12 s, set in _handle_play_input)
 BIG_SHAKE_SECONDS = 0.2
 # how long the just-locked cells flash after a no-clear lock (P22)
 LOCK_FLASH_SECONDS = 0.12
@@ -589,26 +589,16 @@ class Session:
     def _dispatch_key(self, key: int, now: float) -> bool:
         """Apply one key; True when the player quit (Q in open play).
 
-        ESC is the "back" key: at game over it starts a new game without
-        saving the score (any recorded entry is discarded); otherwise it
-        closes a dialog, unpauses, or pauses in open play. Q is the
-        long-standing quit alias (in a modal it only closes the dialog).
+        Order matters: name entry pre-processes the key WITHOUT consuming
+        it (so a committing R/Q still acts on it below), then the global
+        keys (q/r/g/l/ESC/?/s/h/p), then the open menu's keys, then the
+        play keys. ESC is the "back" key: at game over it starts a new
+        game without saving the score (any recorded entry is discarded);
+        otherwise it closes a dialog, unpauses, or pauses in open play.
+        Q is the long-standing quit alias (in a modal it only closes the
+        dialog).
         """
-        # High-score name entry (game over, top-10): edit the typed name.
-        # Enter commits and starts a new game (Enter arrives as 10 in most
-        # pty/terminal setups, 13/KEY_ENTER in others); R/Q commit first,
-        # then act on it. None of these count as typed characters.
-        if self.engine.game_over and self.name_awaiting:
-            if key in (10, 13, curses.KEY_ENTER):
-                self.commit_name()
-                self.reset_game()  # keep the score, start a new game
-            elif key in (ord("q"), ord("Q"), ord("r"), ord("R")):
-                self.commit_name()  # the q/r branch below then acts on it
-            elif key in (8, 127, curses.KEY_BACKSPACE):
-                self.typed_name = self.typed_name[:-1]
-            elif 32 <= key <= 126 and len(self.typed_name) < MAX_NAME:
-                self.typed_name += chr(key)
-
+        self._handle_name_entry(key)
         if key in (ord("q"), ord("Q")):
             if self.menu is not None:
                 self.close_menu()  # in a modal, Q closes the dialog, never quits
@@ -650,81 +640,112 @@ class Session:
         elif key in (ord("p"), ord("P")) and self.menu is None:
             self.engine.paused = not self.engine.paused
         elif self.menu == "settings" and not self.engine.game_over:
-            if key in (curses.KEY_UP, ord("k")):
-                self.menu_cursor = (self.menu_cursor - 1) % len(OPTIONS)
-            elif key in (curses.KEY_DOWN, ord("j")):
-                self.menu_cursor = (self.menu_cursor + 1) % len(OPTIONS)
-            elif key in (curses.KEY_RIGHT, curses.KEY_LEFT, ord(" "), curses.KEY_ENTER):
-                d = -1 if key == curses.KEY_LEFT else 1
-                opt = OPTIONS[self.menu_cursor]
-                new_settings = cycle(self.state.settings, opt.key, d)
-                # Persist immediately through the single state store.
-                self.state.update_settings(**{opt.key: value_of(new_settings, opt.key)})
-                # Apply the change live: input timing reads the reader's
-                # das/arr, and a theme change re-inits the color pairs and
-                # the cached attrs without a restart.
-                self.reader.das = self.state.settings.das
-                self.reader.arr = self.state.settings.arr
-                if opt.key == "theme":
-                    init_colors(self.state.settings.theme)
-                    build_attrs()
+            self._handle_settings_menu(key)
         elif self.menu == "replays":
-            # P19: digits 1-5 start that saved replay (newest first).
-            if key in (ord("1"), ord("2"), ord("3"), ord("4"), ord("5")):
-                index = key - ord("1")
-                if index < len(self.state.replays()):
-                    self.close_menu()
-                    self.start_replay(now, index=index)
+            self._handle_replays_menu(key, now)
         elif self.menu is None and not self.engine.paused and not self.engine.game_over:
-            if key in (curses.KEY_LEFT, ord("a"), ord("A"), curses.KEY_RIGHT, ord("d"), ord("D")):
-                # a/d are the home-row aliases for the arrow keys (P15);
-                # same DAS/ARR path and L/R replay tokens as the arrows.
-                d = -1 if key in (curses.KEY_LEFT, ord("a"), ord("A")) else 1
-                # One move per fresh press; holding streams at ARR after DAS.
-                if self.reader.on_direction(d, now):
-                    self.log_action("L" if d < 0 else "R")
-                    self.engine.move(d, now)
-            elif key == curses.KEY_UP:
-                if self.reader.allow_rotate(now):
-                    self.log_action("U")
-                    # P30: a successful rotation highlights the piece for
-                    # ROTATE_FLASH_SECONDS — a small click that makes it
-                    # feel crisp.
-                    if self.engine.rotate(1, now):
-                        self.effects.rotate_flash_until = now + ROTATE_FLASH_SECONDS
-            elif key in (ord("z"), ord("Z")):
-                if self.reader.allow_rotate(now):
-                    self.log_action("Z")
-                    if self.engine.rotate(-1, now):
-                        self.effects.rotate_flash_until = now + ROTATE_FLASH_SECONDS
-            elif key in (ord("x"), ord("X")):
-                if self.reader.allow_rotate(now):
-                    self.log_action("X")
-                    if self.engine.rotate_180(now):
-                        self.effects.rotate_flash_until = now + ROTATE_FLASH_SECONDS
-            elif key == curses.KEY_DOWN:
-                # P14: one cell per fresh press; while held, the stream in
-                # _stream_held_input drops at the fixed SOFT_DROP_RATE
-                # cadence (OS auto-repeats are swallowed here).
-                if self.reader.on_soft_drop(now):
-                    self.log_action("S")
-                    self.engine.soft_drop()
-            elif key == ord(" "):
-                self.log_action("H")
-                if self.engine.hard_drop() > 0 and self.state.settings.shake:
-                    self.effects.shake_until = now + 0.12
-            elif key in (ord("c"), ord("C")):
-                self.log_action("C")
-                if self.state.settings.hold:
-                    can = self.engine.can_hold
-                    self.engine.hold()
-                    # P29: an accepted hold (grab or swap) flips can_hold
-                    # to False and flashes the HOLD box; rejected holds
-                    # (window, frozen, hold-off) leave it True.
-                    if can and not self.engine.can_hold:
-                        self.effects.hold_flash_until = now + HOLD_FLASH_SECONDS
-
+            self._handle_play_input(key, now)
         return False
+
+    def _handle_name_entry(self, key: int) -> None:
+        """High-score name entry (game over, top-10): edit the typed
+        name. Enter commits and starts a new game (Enter arrives as 10
+        in most pty/terminal setups, 13/KEY_ENTER in others); R/Q commit
+        first, then act on it. None of these count as typed characters.
+        The key is NOT consumed — dispatch continues below."""
+        if not (self.engine.game_over and self.name_awaiting):
+            return
+        if key in (10, 13, curses.KEY_ENTER):
+            self.commit_name()
+            self.reset_game()  # keep the score, start a new game
+        elif key in (ord("q"), ord("Q"), ord("r"), ord("R")):
+            self.commit_name()  # the q/r branch below then acts on it
+        elif key in (8, 127, curses.KEY_BACKSPACE):
+            self.typed_name = self.typed_name[:-1]
+        elif 32 <= key <= 126 and len(self.typed_name) < MAX_NAME:
+            self.typed_name += chr(key)
+
+    def _handle_settings_menu(self, key: int) -> None:
+        """The settings dialog's keys: move the cursor, cycle the value
+        under it (persisted immediately through the single state store).
+        The change is applied live: input timing reads the reader's
+        das/arr, and a theme change re-inits the color pairs and the
+        cached attrs without a restart."""
+        if key in (curses.KEY_UP, ord("k")):
+            self.menu_cursor = (self.menu_cursor - 1) % len(OPTIONS)
+        elif key in (curses.KEY_DOWN, ord("j")):
+            self.menu_cursor = (self.menu_cursor + 1) % len(OPTIONS)
+        elif key in (curses.KEY_RIGHT, curses.KEY_LEFT, ord(" "), curses.KEY_ENTER):
+            d = -1 if key == curses.KEY_LEFT else 1
+            opt = OPTIONS[self.menu_cursor]
+            new_settings = cycle(self.state.settings, opt.key, d)
+            self.state.update_settings(**{opt.key: value_of(new_settings, opt.key)})
+            self.reader.das = self.state.settings.das
+            self.reader.arr = self.state.settings.arr
+            if opt.key == "theme":
+                init_colors(self.state.settings.theme)
+                build_attrs()
+
+    def _handle_replays_menu(self, key: int, now: float) -> None:
+        """The replay list's keys (P19): digits 1-5 start that saved
+        replay (newest first)."""
+        if key in (ord("1"), ord("2"), ord("3"), ord("4"), ord("5")):
+            index = key - ord("1")
+            if index < len(self.state.replays()):
+                self.close_menu()
+                self.start_replay(now, index=index)
+
+    def _handle_play_input(self, key: int, now: float) -> None:
+        """The play keys in open play (no menu, unpaused, live game):
+        moves, rotations, drops, and hold. Every accepted intent is
+        logged for the game's replay."""
+        if key in (curses.KEY_LEFT, ord("a"), ord("A"), curses.KEY_RIGHT, ord("d"), ord("D")):
+            # a/d are the home-row aliases for the arrow keys (P15);
+            # same DAS/ARR path and L/R replay tokens as the arrows.
+            d = -1 if key in (curses.KEY_LEFT, ord("a"), ord("A")) else 1
+            # One move per fresh press; holding streams at ARR after DAS.
+            if self.reader.on_direction(d, now):
+                self.log_action("L" if d < 0 else "R")
+                self.engine.move(d, now)
+        elif key == curses.KEY_UP:
+            if self.reader.allow_rotate(now):
+                self.log_action("U")
+                # P30: a successful rotation highlights the piece for
+                # ROTATE_FLASH_SECONDS — a small click that makes it
+                # feel crisp.
+                if self.engine.rotate(1, now):
+                    self.effects.rotate_flash_until = now + ROTATE_FLASH_SECONDS
+        elif key in (ord("z"), ord("Z")):
+            if self.reader.allow_rotate(now):
+                self.log_action("Z")
+                if self.engine.rotate(-1, now):
+                    self.effects.rotate_flash_until = now + ROTATE_FLASH_SECONDS
+        elif key in (ord("x"), ord("X")):
+            if self.reader.allow_rotate(now):
+                self.log_action("X")
+                if self.engine.rotate_180(now):
+                    self.effects.rotate_flash_until = now + ROTATE_FLASH_SECONDS
+        elif key == curses.KEY_DOWN:
+            # P14: one cell per fresh press; while held, the stream in
+            # _stream_held_input drops at the fixed SOFT_DROP_RATE
+            # cadence (OS auto-repeats are swallowed here).
+            if self.reader.on_soft_drop(now):
+                self.log_action("S")
+                self.engine.soft_drop()
+        elif key == ord(" "):
+            self.log_action("H")
+            if self.engine.hard_drop() > 0 and self.state.settings.shake:
+                self.effects.shake_until = now + 0.12
+        elif key in (ord("c"), ord("C")):
+            self.log_action("C")
+            if self.state.settings.hold:
+                can = self.engine.can_hold
+                self.engine.hold()
+                # P29: an accepted hold (grab or swap) flips can_hold
+                # to False and flashes the HOLD box; rejected holds
+                # (window, frozen, hold-off) leave it True.
+                if can and not self.engine.can_hold:
+                    self.effects.hold_flash_until = now + HOLD_FLASH_SECONDS
 
     # -- simulation ------------------------------------------------------
 
@@ -750,64 +771,78 @@ class Session:
             self.engine.advance_flash()
 
     def _apply_effects(self, now: float) -> None:
+        """Consume the engine's effects for this frame: sync the user's
+        effect settings, consume the events (floaters, beeps, spin
+        flash, shake), apply the game's one-shot moment effects, then
+        pump the beeps whose time has come (last: the patterns queued
+        this frame fire on this frame)."""
+        self.effects.sound = self.state.settings.sound
+        self.effects.shake_on = self.state.settings.shake
+        self._consume_events(now)
+        self._score_moments(now)
+        self.effects.pump(now)
+
+    def _consume_events(self, now: float) -> None:
         """Consume the engine's events: floating text, spin flash, beeps,
         and the big-clear shake. P25 layers combo/B2B floaters on top of
-        the clear events — the engine's combo/b2b state is already
-        post-commit by the time the events are consumed, so a combo of 2+
+        the clear events — the engine stamps each event with the
+        post-commit combo/b2b (``Event.combo``/``Event.b2b``) at scoring
+        time, so the floaters read the event's snapshot: a combo of 2+
         means this clear continued a run, and a qualifying kind (Tetris
         or a 2+ line T-spin) with b2b active means the streak bonus is
         running (a no-line T-spin leaves the streak untouched)."""
-        self.effects.sound = self.state.settings.sound
-        self.effects.shake_on = self.state.settings.shake
-        combo, b2b = self.engine.combo, self.engine.b2b
         fresh = list(self.engine.events)
         self.effects.on_events(self.engine.events, now)
         for ev in fresh:
             if ev.kind not in ("clear", "tetris", "tspin", "tspin-mini"):
                 continue
-            if combo >= 2:
+            if ev.combo >= 2:
                 self.effects.floaters.append(
-                    (f"COMBO \u00d7{combo}", max(1, ev.row - 2), now)
+                    (f"COMBO \u00d7{ev.combo}", max(1, ev.row - 2), now)
                 )
-            if b2b and (
+            if ev.b2b and (
                 ev.kind == "tetris"
                 or (ev.kind in ("tspin", "tspin-mini") and ev.lines >= 2)
             ):
                 self.effects.floaters.append(
                     ("B2B", min(BOARD_H - 2, ev.row + 1), now)
                 )
-        # P26: the game-over sting — once, on the flip of a live game
-        # (never the replayed engine's own end: while a replay runs the
-        # live game's state is frozen, so the flip detector stands down
-        # and was_over keeps its value). A sprint win gets the brisk,
-        # rising pattern; a loss or top-out the slow, descending one.
-        if not self._replay.active:
-            if self.engine.game_over and not self.run.was_over:
-                self.effects.pattern(
-                    now, (0.0, 0.1, 0.2) if self.engine.won else (0.0, 0.18, 0.42)
-                )
-            self.run.was_over = self.engine.game_over
-            # P27: the new-best jingle — once, the frame the live score
-            # first passes the pre-game best: a center-board floater plus
-            # a brisk three-beep.
-            if not self.run.new_best_fired and self._live_new_best():
-                self.run.new_best_fired = True
-                self.effects.floaters.append(("NEW BEST!", BOARD_H // 2, now))
-                self.effects.pattern(now, (0.0, 0.08, 0.16))
-            # P28: sprint endgame tension — one tick beep on each second
-            # boundary during the final five seconds (the per-second
-            # scene-key quantization already redraws on each flip).
-            if (
-                self.engine.sprint
-                and not self.engine.game_over
-                and self.engine.time_left is not None
-            ):
-                sec = int(self.engine.time_left)
-                if sec != self.run.last_sprint_sec and 1 <= sec <= 5:
-                    self.effects.pattern(now, (0.0,))
-                self.run.last_sprint_sec = sec
-        # Pump last: the patterns queued this frame fire on this frame.
-        self.effects.pump(now)
+
+    def _score_moments(self, now: float) -> None:
+        """The game's one-shot "moment" effects (P26–P28): the game-over
+        sting, the new-best jingle, and the sprint final-5-s tick.
+        Live games only — a replayed run never re-triggers them (while a
+        replay runs the live game's state is frozen, so the flip detector
+        stands down and was_over keeps its value)."""
+        if self._replay.active:
+            return
+        # P26: the game-over sting — once, on the flip of a live game.
+        # A sprint win gets the brisk, rising pattern; a loss or top-out
+        # the slow, descending one.
+        if self.engine.game_over and not self.run.was_over:
+            self.effects.pattern(
+                now, (0.0, 0.1, 0.2) if self.engine.won else (0.0, 0.18, 0.42)
+            )
+        self.run.was_over = self.engine.game_over
+        # P27: the new-best jingle — once, the frame the live score
+        # first passes the pre-game best: a center-board floater plus
+        # a brisk three-beep.
+        if not self.run.new_best_fired and self._live_new_best():
+            self.run.new_best_fired = True
+            self.effects.floaters.append(("NEW BEST!", BOARD_H // 2, now))
+            self.effects.pattern(now, (0.0, 0.08, 0.16))
+        # P28: sprint endgame tension — one tick beep on each second
+        # boundary during the final five seconds (the per-second
+        # scene-key quantization already redraws on each flip).
+        if (
+            self.engine.sprint
+            and not self.engine.game_over
+            and self.engine.time_left is not None
+        ):
+            sec = int(self.engine.time_left)
+            if sec != self.run.last_sprint_sec and 1 <= sec <= 5:
+                self.effects.pattern(now, (0.0,))
+            self.run.last_sprint_sec = sec
 
     # -- game-over bookkeeping --------------------------------------------
 

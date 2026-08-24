@@ -59,6 +59,10 @@ class Event:
     rows this lock cleared — 0 for a no-line T-spin — so the UI can tell a
     B2B-qualifying T-spin (2+ lines) from a no-line one (which leaves the
     back-to-back streak untouched).
+
+    ``combo``/``b2b`` (R3) are the post-commit combo and back-to-back
+    state stamped at scoring time, so the UI's COMBO/B2B floaters read
+    the event's snapshot instead of the engine's live state.
     """
 
     text: str
@@ -66,6 +70,8 @@ class Event:
     row: int
     center: tuple[int, int] | None = None
     lines: int = 0
+    combo: int = 0
+    b2b: bool = False
 
 
 class Tetris:
@@ -457,7 +463,10 @@ class Tetris:
             self.spins += bd.spins_delta
             self.b2b = bd.b2b_after
             self.events.append(
-                Event(text=f"{bd.label} +{bd.points}", kind=bd.kind, row=cy, center=(cx, cy))
+                Event(
+                    text=f"{bd.label} +{bd.points}", kind=bd.kind, row=cy, center=(cx, cy),
+                    combo=self.combo, b2b=self.b2b,
+                )
             )
         self._pending_spin = None
 
@@ -487,7 +496,8 @@ class Tetris:
 
         self.events.append(
             Event(
-                text=f"{bd.label} +{bd.points}", kind=bd.kind, row=rows[-1], lines=count
+                text=f"{bd.label} +{bd.points}", kind=bd.kind, row=rows[-1], lines=count,
+                combo=self.combo, b2b=self.b2b,
             )
         )
 
