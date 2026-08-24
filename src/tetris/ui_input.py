@@ -70,9 +70,11 @@ class KeyReader:
         self._last_soft = 0.0      # when the last streamed soft drop fired
 
     def reset(self) -> None:
-        # Restart/menu resets the move throttle, any in-flight hold, and
-        # any partially reassembled ESC sequence (stale bytes must never
-        # leak into or out of a modal).
+        # Restart/menu resets the move throttle, the rotate cooldown
+        # (a stale one must not delay the first rotation after a restart
+        # — R6), any in-flight hold, and any partially reassembled ESC
+        # sequence (stale bytes must never leak into or out of a modal).
+        self.last_rotate = 0.0
         self._last_move = 0.0
         self._dir = 0
         self._esc_seq = []

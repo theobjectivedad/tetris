@@ -731,6 +731,19 @@ def test_soft_drop_reset_clears_hold() -> None:
     assert r.on_soft_drop(1.2)  # next press is fresh again
 
 
+def test_reset_clears_rotate_cooldown() -> None:
+    """R6: a restart (reader.reset) also clears the rotate cooldown, so a
+    rotation is allowed immediately after a restart instead of being
+    blocked for up to ROTATE_COOLDOWN by a rotation made just before it."""
+    from tetris.ui_input import KeyReader
+
+    r = KeyReader()
+    assert r.allow_rotate(100.0)  # a rotation just before the restart
+    assert not r.allow_rotate(100.05)  # the cooldown is still active
+    r.reset()
+    assert r.allow_rotate(100.06)  # restart: immediately allowed
+
+
 def test_soft_drop_streaming_via_game_loop(monkeypatch) -> None:
     """P14 end-to-end: holding down (press + simulated OS auto-repeat at
     35 ms) produces drops spaced at the stream cadence (~50 ms), never

@@ -30,6 +30,11 @@ SPRINT_LINES = 10       # lines to clear to win a sprint (P11)
 SPRINT_TIME = 180.0     # seconds allotted for a sprint (P11)
 DANGER_TOP_ROWS = 4     # P24: the UI danger bar engages when the stack
                         # reaches this row (or the ceiling)
+# T-spin "front" corners per rotation (the side the nub points at): a
+# full spin needs both front corners occupied. Corner indices match the
+# tuple order in _detect_spin: 0=top-left, 1=top-right, 2=bottom-left,
+# 3=bottom-right.
+TSPIN_FRONT: dict[int, tuple[int, int]] = {0: (0, 1), 1: (1, 3), 2: (2, 3), 3: (0, 2)}
 
 
 @dataclass
@@ -40,9 +45,11 @@ class Piece:
     rot: int = 0
 
     def cells(self) -> list[tuple[int, int]]:
-        return [(self.x + dx, self.y + dy) for dx, dy in PIECES[self.kind][self.rot]]
+        """Cells the piece occupies at its current rotation."""
+        return self.cells_at_rot(self.rot)
 
     def cells_at_rot(self, rot: int) -> list[tuple[int, int]]:
+        """Cells the piece would occupy if it were at ``rot`` (same x/y)."""
         return [(self.x + dx, self.y + dy) for dx, dy in PIECES[self.kind][rot]]
 
 
@@ -278,12 +285,10 @@ class Tetris:
         """Drop instantly. Returns cells fallen (for scoring/effects)."""
         if self.game_over or self.frozen:
             return 0
+        gy = self.ghost_y()
         p = self.piece
-        dist = 0
-        while not self._collides(Piece(p.kind, p.x, p.y + 1, p.rot), p.rot):
-            p = Piece(p.kind, p.x, p.y + 1, p.rot)
-            dist += 1
-        self.piece = p
+        dist = gy - p.y
+        self.piece = Piece(p.kind, p.x, gy, p.rot)
         self.score += HARD_DROP_POINTS * dist
         self.version += 1
         self._lock()
@@ -418,7 +423,7 @@ class Tetris:
         )
         if sum(corners) < 3:
             return None
-        front = {0: (0, 1), 1: (1, 3), 2: (2, 3), 3: (0, 2)}[self.piece.rot]
+        front = TSPIN_FRONT[self.piece.rot]
         return bool(corners[front[0]] and corners[front[1]])
 
     def _lock(self) -> None:
