@@ -587,3 +587,122 @@ endgame tension, hold and rotation are silent.
 
 **All 9 Phase 3 items (P22–P30) are complete.** Final gate: `just check`
 green (ruff + mypy --strict), 323 pytest tests passing.
+
+---
+
+## Phase 4 — Refactor & code-quality (R1–R9)
+
+> **GOAL (verbatim from owner):** "time to take off your product manager
+> hat and put on the senior engineer hat. Fully analyze the code and
+> develop a plan for cleaner code, better design patterns (if applicable),
+> more maintainable and overall more beautiful and performant codebase.
+> Come up with your list of work then set a goal to burn down the
+> implementation."
+>
+> Phase 4 is a **refactor round, not a feature round**: behavior,
+> rendering, and the MCP stats contract are unchanged (or strictly
+> improved); every R-item lands behind `just check` + `uv run pytest`.
+> Global rules (contracts, purity, `STAT_LABELS`, commit policy, MCP
+> play-test policy) apply unchanged.
+
+### Audit verdict (2026-08-24, tree 16d7649, 323 tests green)
+
+The pure core (`engine`/`pieces`/`scoring`/`board`/`settings`/`state`)
+is well-factored: small modules, pure functions, tolerant I/O, good
+docstrings. The debt is concentrated where three feature phases accreted:
+
+1. **`ui_session.Session` is a God object** (≈700 lines, ≈35 instance
+   fields): replay bookkeeping is 8 scattered fields mutated in 5 places;
+   per-game lifecycle state is ~12 fields reset in a ~20-line block that
+   is duplicated between `__init__` and `reset_game`; `_dispatch_key` is
+   a 180-line five-context if/elif; `_apply_effects` mixes five
+   concerns.
+2. **Per-frame disk I/O**: `build_replays_modal` re-reads and re-parses
+   `replays.json` on every frame while the replay list is open (and every
+   `GameState.replays()` call); `save()` writes non-atomically.
+3. **Module-global attribute rebinding**: `init_colors` rebinds
+   `BORDER_ATTR`/`DANGER_ATTR` globals; `main.py` re-exports a snapshot
+   taken at import (latent staleness; a test patch seam pinned to the
+   globals). 30 re-exports in `main.__all__` of which ~15 exist only to
+   keep old test imports working.
+4. **Duplication**: tolerant int/bool JSON coercion (`isinstance(x, int)
+   and not isinstance(x, bool)`) in 7+ places across 3 modules; UI
+   re-derives combo/B2B rules the engine already applied;
+   `Piece.cells()`/`cells_at_rot` near-identical; pyproject declares dev
+   deps twice (`optional-dependencies.dev` and `dependency-groups.dev`,
+   out of sync); stale test docstrings.
+5. **Performance**: no CPU concern (hot path ≪ budget); the real items
+   are the per-frame file reads and per-frame modal rebuilds (B1/B2).
+
+### Work list
+
+| # | Item | Where |
+|---|------|-------|
+| R1 | Replay extraction — pull the 8 replay fields + start/step/finish/speed/abort into a `ReplayController`; Session delegates | ui_session |
+| R2 | Game-lifecycle state object — `GameRun` dataclass (seed, score-record, sprint bookkeeping, replay log); `__init__` and `reset_game` share one construction path | ui_session |
+| R3 | Dispatch/effects decomposition — `_dispatch_key` context split (`_handle_name_entry` / play-input / settings-menu extracts); `_apply_effects` split into `_consume_events` + `_score_moments`; combo/B2B floaters driven by engine-stamped `Event.combo`/`Event.b2b` (additive fields) instead of UI re-derivation | ui_session, engine |
+| R4 | State hardening — in-memory replay cache (invalidated on save), atomic `save()` (tmp + `os.replace`), shared tolerant `as_int`/`as_number` helpers in `state.py` reused by state, ui_render, ui_session | state, ui_render, ui_session |
+| R5 | Render-layer cleanup — `AttrCache` dataclass replaces the 7 rebinding module globals (kills the `global` statements and the re-export staleness class); `init_colors` fixed-pair special-case simplified; sprint-TIME double-if merged; per-kind preview footprint cached once; `draw_board` drops the `line_parts` intermediate | ui_render (+2 test patch sites) |
+| R6 | Engine & input micro-cleanup — `hard_drop` via `ghost_y`; `Piece.cells()` delegates to `cells_at_rot`; `TSPIN_FRONT` hoisted to a module constant; `KeyReader.reset()` also clears the stale rotate cooldown (+ test) | engine, ui_input |
+| R7 | Packaging/CI hygiene — single dev dependency group (`pytest`, `ruff`, `mypy`, `pre-commit`), drop the stale `[project.optional-dependencies] dev`, CI `uv sync --extra dev` → `uv sync`; rewrite the stale `test_ui_polish.py` header (the "in-flight / intentionally failing" story is over) | pyproject, ci.yml, tests |
+| R8 | Contract slimming — tests import from the canonical modules (`ui_render`, `ui_input`) instead of `tetris.main`; `main.__all__` shrinks to the real monkeypatch contract (`Tetris`, `time`, `curses`, `game_loop`, `build_attrs`, `draw_board`, `BOARD_H`) + `FRAME`/`main`; AGENTS.md hard-contract list updated to match | main, tests, AGENTS.md |
+| R9 | Final sync — README re-verify (test count, features), engine perf re-measure (confirm the 200-games baseline held), full gate, MCP smoke, plan log + burn-down close | docs |
+
+### Global rules (Phase 4 additions)
+
+- **Behavior is frozen**: rendering output, key handling, scoring,
+  replay semantics, and the MCP stats contract are unchanged. The only
+  permitted behavior changes are the R6 rotate-cooldown reset after
+  restart and the R4 crash-safety of saves (documented per-item).
+- The `main.time` / `main.Tetris` monkeypatch seams (AGENTS.md hard
+  contract) survive R8; everything else in `main.__all__` is fair game
+  once tests import from the canonical modules.
+- `Event` changes are additive-only (new fields with defaults) — the
+  event vocabulary is a UI contract.
+
+### Acceptance (per item)
+
+- R1/R2: full pytest unchanged-green; `Session`'s public surface
+  (`on_frame`, `reset_game`, `open_menu`, `close_menu`, `commit_name`,
+  engine/menu/name fields used by tests) unchanged; `ui_session.py`
+  loses ≥150 lines of duplicated/structural code.
+- R3: `_dispatch_key` < 90 lines; no combo/B2B rule lives in the UI
+  layer (floaters are pure event-field reads); gate green.
+- R4: opening the replays menu does ≤1 file read (verified by
+  counting `replays.json` opens in a test or instrumented run);
+  `save()` atomic (corrupt-state test: simulate a mid-write failure or
+  assert tmp-then-replace ordering); all tolerant reads funnel through
+  the shared helpers.
+- R5: no `global` statement remains in `ui_render`; the two test patch
+  sites use the new seam; a scripted MCP key run renders identically
+  (spot-check via `tetris_screen`).
+- R6/R7: gate green; rotate-immediately-after-restart covered by a test;
+  CI installs its gate tools from the project env (no ad-hoc `--with`).
+- R8: `grep -r "main\." tests/` shows only the 7-name contract;
+  `len(main.__all__)` ≤ 10; AGENTS.md matches reality.
+- R9: README claims zero drift; perf re-measure within noise of the
+  2026-07-21 baseline; final gate + full MCP smoke green; working tree
+  clean.
+
+### Non-goals (deliberate)
+
+- **No feature work** — feel/juice/replay value shipped in Phases 2–3;
+  if R3's event stamping makes a new juice item cheap, it is *noted*
+  here, not implemented.
+- **No engine restructuring** — `Tetris`'s shape (one class owning the
+  simulation) is idiomatic for a Tetris core and fully tested; splitting
+  gravity/lock into sub-objects would trade cohesion for abstraction
+  without a testable win.
+- **No GUI/alternate-renderer work** — the curses layer stays.
+- **No micro-optimization of hot paths** — the audit re-confirmed the
+  headroom (µs-level ops against a 20 ms frame budget); only the
+  per-frame I/O (R4) is worth touching.
+
+### Milestones (one commit each: gate + tests)
+
+M1 R1 · M2 R2 · M3 R3 (UI smoke) · M4 R4 · M5 R5 (UI smoke) ·
+M6 R6 · M7 R7 · M8 R8 (UI smoke) · M9 R9 (final gate + full MCP smoke +
+README/plan sync).
+
+### Progress log
+
