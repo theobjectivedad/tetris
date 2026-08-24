@@ -32,6 +32,11 @@ COLORS: dict[str, int] = {"I": 1, "O": 2, "T": 3, "S": 4, "Z": 5, "J": 6, "L": 7
 # remains the no-color fallback.
 BORDER_ATTR = curses.A_DIM
 BORDER_PAIR = 11
+# Danger bar (P24): white on red — fixed like the flash pair, recoloring
+# the top border while the stack nears the ceiling. A_BLINK is the
+# no-color fallback (a blinking bar still reads as a warning).
+DANGER_PAIR = 13
+DANGER_ATTR = curses.A_BLINK
 # Board/panel background pair: a very dark gray (ext 235) — a subtle
 # depth fill that becomes a no-op where the color is unmappable.
 BG_PAIR = 12
@@ -83,7 +88,7 @@ def init_colors(theme: str = "classic") -> None:
     pair (re-run build_attrs() afterwards to refresh cached attrs). The
     flash pair (10) and the border/background pairs (11/12) are fixed.
     """
-    global BORDER_ATTR
+    global BORDER_ATTR, DANGER_ATTR
     if not curses.has_colors():
         return
     t = THEMES.get(theme, THEMES[DEFAULT_THEME])
@@ -110,8 +115,10 @@ def init_colors(theme: str = "classic") -> None:
     # lack color_count(), so this intentionally does not branch on it —
     # ncurses degrades the extended pairs gracefully instead.)
     curses.init_pair(BORDER_PAIR, 231, curses.COLOR_BLACK)
+    curses.init_pair(DANGER_PAIR, curses.COLOR_WHITE, curses.COLOR_RED)
     curses.init_pair(BG_PAIR, curses.COLOR_BLACK, 235)
     BORDER_ATTR = curses.color_pair(BORDER_PAIR)
+    DANGER_ATTR = curses.color_pair(DANGER_PAIR)
 
 
 def build_attrs() -> None:
@@ -453,6 +460,7 @@ def draw_board(
     lock_cells: frozenset[tuple[int, int]] | None = None,
     pulse_dim: bool = False,
     rotate_flash: bool = False,
+    danger: bool = False,
 ) -> None:
     """Draw the board frame, background, cells, ghost, and live piece.
 
@@ -460,13 +468,15 @@ def draw_board(
     accent while the lock flash is active. ``pulse_dim`` (P23): dim the
     live piece this frame — the 8 Hz lock-delay pulse. ``rotate_flash``
     (P30): draw the live piece in the highlight accent while a successful
-    rotation's flash is active (wins over the pulse).
+    rotation's flash is active (wins over the pulse). ``danger`` (P24):
+    blink the top border red while the stack nears the ceiling.
     """
     # Solid border around the play area. The walls are outside the cell
     # area (1 col per side), so blocks never render on top of them.
     right = bx + BOARD_W_DRAWN - 1
+    top_attr = DANGER_ATTR | curses.A_BLINK if danger else BORDER_ATTR
     try:
-        stdscr.addstr(by, bx, BOARD_BAR, BORDER_ATTR)
+        stdscr.addstr(by, bx, BOARD_BAR, top_attr)
         stdscr.addstr(by + BOARD_H + 1, bx, BOARD_BAR, BORDER_ATTR)
         for y in range(1, BOARD_H + 1):
             stdscr.addstr(by + y, bx, "█", BORDER_ATTR)
@@ -600,6 +610,9 @@ def draw_stats_panel(stdscr: curses.window, engine: Tetris, by: int, x: int, new
         # Sprint (P11): blink the countdown once 30 s or less remain.
         if engine.sprint and label == "TIME" and engine.time_left is not None and engine.time_left <= 30:
             value_attr = STAT_ATTR | curses.A_BLINK
+        # P25: an active back-to-back streak glows in the highlight color.
+        if label == "B2B" and engine.b2b:
+            value_attr = HILITE_ATTR
         try:
             stdscr.addstr(
                 by + 2 + i, x, f"{label:<7}", STAT_ATTR | curses.A_DIM
@@ -647,6 +660,8 @@ __all__ = [
     "BORDER_PAIR",
     "CELL_OFF",
     "COLORS",
+    "DANGER_ATTR",
+    "DANGER_PAIR",
     "HILITE_ATTR",
     "HOLD_W",
     "NEED_H",

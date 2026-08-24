@@ -14,7 +14,7 @@ import curses
 
 import pytest
 
-from tetris.engine import Tetris
+from tetris.engine import Event, Tetris
 from tetris.pieces import BOARD_W
 from tetris.ui_session import LOCK_FLASH_SECONDS, Session
 
@@ -145,3 +145,108 @@ def test_pulse_draws_dim_half_frames(monkeypatch, tmp_path) -> None:
         if 7 <= y <= 9 and 31 <= x <= 50 and a & curses.A_DIM
     ]
     assert top_dim
+
+
+# ---------------------------------------------------------------------------
+# P24: danger zone
+# ---------------------------------------------------------------------------
+
+
+def test_danger_bar_blinks_when_stack_reaches_top(monkeypatch, tmp_path) -> None:
+    """With the stack within DANGER_TOP_ROWS of the ceiling the board's top
+    border carries A_BLINK (DANGER_ATTR's monochrome fallback; white on
+    red on a color terminal)."""
+    s = _session(monkeypatch, tmp_path)
+    for x in range(BOARD_W):
+        s.engine.board.set_cell(x, 1, "J")  # stack top at row 1 (<= 4)
+    scr = FakeScreen()
+    s.on_frame(scr, 1.0)
+    # The top border row is by = max(1, (40 - 27) // 2) = 6; the inner bar
+    # runs columns 31-50 (the walls at 30/51 keep the plain border attr).
+    top = [a for (y, x), a in scr.grid_attr.items() if y == 6 and 31 <= x <= 50]
+    assert top
+    assert all(a & curses.A_BLINK for a in top)
+
+
+def test_no_danger_bar_on_empty_board(monkeypatch, tmp_path) -> None:
+    s = _session(monkeypatch, tmp_path)
+    scr = FakeScreen()
+    s.on_frame(scr, 1.0)
+    top = [a for (y, x), a in scr.grid_attr.items() if y == 6 and 31 <= x <= 50]
+    assert top
+    assert all(not (a & curses.A_BLINK) for a in top)
+
+
+# ---------------------------------------------------------------------------
+# P25: combo & B2B feedback
+# ---------------------------------------------------------------------------
+
+
+def test_combo_and_b2b_floaters_on_qualifying_clear(monkeypatch, tmp_path) -> None:
+    """A Tetris that continues a combo (post-commit combo >= 2) and carries
+    the B2B streak gets the score floater plus 'COMBO ×N' above it and a
+    'B2B' tag below it."""
+    s = _session(monkeypatch, tmp_path)
+    s.engine.combo = 3  # post-commit: this clear continued the run
+    s.engine.b2b = True
+    s.engine.events.append(Event("TETRIS +2400", "tetris", 15, lines=4))
+    s._apply_effects(2.0)
+    floaters = {(tx, row) for tx, row, _ in s.effects.floaters}
+    assert ("TETRIS +2400", 15) in floaters
+    assert ("COMBO ×3", 13) in floaters  # row - 2
+    assert ("B2B", 16) in floaters  # row + 1
+
+
+def test_no_line_spin_keeps_streak_but_shows_no_b2b(monkeypatch, tmp_path) -> None:
+    """A no-line T-spin (lines=0) leaves the streak untouched but is not a
+    B2B-qualifying clear — no B2B tag; the combo is 0, so no COMBO tag."""
+    s = _session(monkeypatch, tmp_path)
+    s.engine.b2b = True  # carried over from an earlier Tetris
+    s.engine.events.append(Event("T-SPIN MINI +100", "tspin-mini", 12, lines=0))
+    s._apply_effects(2.0)
+    texts = [tx for tx, _, _ in s.effects.floaters]
+    assert "B2B" not in texts
+    assert not any(t.startswith("COMBO") for t in texts)
+
+
+def test_two_line_tspin_earns_b2b_tag(monkeypatch, tmp_path) -> None:
+    """A 2-line T-spin is B2B-qualifying (like a Tetris)."""
+    s = _session(monkeypatch, tmp_path)
+    s.engine.b2b = True
+    s.engine.events.append(Event("T-SPIN +1800", "tspin", 14, lines=2))
+    s._apply_effects(2.0)
+    texts = [tx for tx, _, _ in s.effects.floaters]
+    assert "B2B" in texts
+
+
+def test_no_combo_floater_until_run_has_two(monkeypatch, tmp_path) -> None:
+    """The first clear of a run (post-commit combo 1) shows no COMBO tag;
+    the second consecutive clear (combo 2) does."""
+    s = _session(monkeypatch, tmp_path)
+    s.engine.combo = 1
+    s.engine.events.append(Event("SINGLE +100", "clear", 17, lines=1))
+    s._apply_effects(2.0)
+    assert not any(tx.startswith("COMBO") for tx, _, _ in s.effects.floaters)
+
+    s.engine.events.append(Event("DOUBLE +300", "clear", 16, lines=2))
+    s.engine.combo = 2
+    s._apply_effects(3.0)
+    floaters = {(tx, row) for tx, row, _ in s.effects.floaters}
+    assert ("COMBO ×2", 14) in floaters
+
+
+def test_b2b_stat_glows_when_active(monkeypatch, tmp_path) -> None:
+    """The sidebar B2B value renders in the highlight accent (bold on this
+    monochrome session) while the streak is active, plain otherwise."""
+    s = _session(monkeypatch, tmp_path)
+    s.engine.b2b = True
+    scr = FakeScreen()
+    s.on_frame(scr, 1.0)
+    # The B2B row is the 5th stat: by + 2 + 4 = 12; the value sits at
+    # block_x + 7 = 17 (x = (80 - 60) // 2).
+    assert scr.grid_attr.get((12, 17), 0) & curses.A_BOLD
+
+    s2 = _session(monkeypatch, tmp_path)
+    scr2 = FakeScreen()
+    s2.on_frame(scr2, 1.0)
+    assert not (scr2.grid_attr.get((12, 17), 0) & curses.A_BOLD)

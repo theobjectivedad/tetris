@@ -15,7 +15,7 @@ import curses
 import random
 import time
 
-from .engine import Event, Tetris
+from .engine import DANGER_TOP_ROWS, Event, Tetris
 from .pieces import BOARD_H, BOARD_W
 from .settings import OPTIONS, cycle, value_of
 from .state import MAX_NAME, GameState
@@ -566,10 +566,31 @@ class Session:
 
     def _apply_effects(self, now: float) -> None:
         """Consume the engine's events: floating text, spin flash, beeps,
-        and the big-clear shake."""
+        and the big-clear shake. P25 layers combo/B2B floaters on top of
+        the clear events — the engine's combo/b2b state is already
+        post-commit by the time the events are consumed, so a combo of 2+
+        means this clear continued a run, and a qualifying kind (Tetris
+        or a 2+ line T-spin) with b2b active means the streak bonus is
+        running (a no-line T-spin leaves the streak untouched)."""
         self.effects.sound = self.state.settings.sound
         self.effects.shake_on = self.state.settings.shake
+        combo, b2b = self.engine.combo, self.engine.b2b
+        fresh = list(self.engine.events)
         self.effects.on_events(self.engine.events, now)
+        for ev in fresh:
+            if ev.kind not in ("clear", "tetris", "tspin", "tspin-mini"):
+                continue
+            if combo >= 2:
+                self.effects.floaters.append(
+                    (f"COMBO \u00d7{combo}", max(1, ev.row - 2), now)
+                )
+            if b2b and (
+                ev.kind == "tetris"
+                or (ev.kind in ("tspin", "tspin-mini") and ev.lines >= 2)
+            ):
+                self.effects.floaters.append(
+                    ("B2B", min(BOARD_H - 2, ev.row + 1), now)
+                )
 
     # -- game-over bookkeeping --------------------------------------------
 
@@ -803,10 +824,20 @@ class Session:
             and int(now * 8) % 2 == 1
         )
 
+        # P24: the stack within DANGER_TOP_ROWS of the ceiling — the top
+        # border blinks red. The stack top only changes on locks, so the
+        # scene key (engine.version) already covers the flip.
+        stack_top = self.engine.stack_top
+        danger = (
+            not self.engine.game_over
+            and stack_top is not None
+            and stack_top <= DANGER_TOP_ROWS
+        )
+
         draw_board(
             stdscr, self.engine, bx + ox, by + oy,
             show_ghost=self.state.settings.ghost, hide_live=glide_frac is not None,
-            lock_cells=lock_cells, pulse_dim=pulse_dim,
+            lock_cells=lock_cells, pulse_dim=pulse_dim, danger=danger,
         )
 
         # Floating score text, drifting up out of the board.

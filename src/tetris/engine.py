@@ -28,6 +28,8 @@ LOCK_RESET_MAX = 15     # move/rotate actions that can refresh the lock timer
 QUEUE_LEN = 5           # pieces visible in the next-piece queue
 SPRINT_LINES = 10       # lines to clear to win a sprint (P11)
 SPRINT_TIME = 180.0     # seconds allotted for a sprint (P11)
+DANGER_TOP_ROWS = 4     # P24: the UI danger bar engages when the stack
+                        # reaches this row (or the ceiling)
 
 
 @dataclass
@@ -53,13 +55,17 @@ class Event:
     milestone when a line clear raises the level; the kind drives the UI's
     beeps, the T-spin corner flash, and the big-clear board shake. ``row``
     is the board row the floating text rises from; ``center`` is the
-    T-spin center (the corner-flash anchor).
+    T-spin center (the corner-flash anchor); ``lines`` (P25) is how many
+    rows this lock cleared — 0 for a no-line T-spin — so the UI can tell a
+    B2B-qualifying T-spin (2+ lines) from a no-line one (which leaves the
+    back-to-back streak untouched).
     """
 
     text: str
     kind: str
     row: int
     center: tuple[int, int] | None = None
+    lines: int = 0
 
 
 class Tetris:
@@ -309,6 +315,16 @@ class Tetris:
         the player can see when it is about to lock."""
         return self._grounded
 
+    @property
+    def stack_top(self) -> int | None:
+        """P24: the topmost row (smallest y) holding a settled cell, or
+        None on an empty board. The UI draws the danger bar while the
+        stack is within ``DANGER_TOP_ROWS`` of the ceiling."""
+        for y, row in enumerate(self.board):
+            if any(row):
+                return y
+        return None
+
     def _can_fall(self) -> bool:
         p = self.piece
         return not self._collides(Piece(p.kind, p.x, p.y + 1, p.rot), p.rot)
@@ -470,7 +486,9 @@ class Tetris:
         self.drop_interval = self._drop_interval_for(self.level)
 
         self.events.append(
-            Event(text=f"{bd.label} +{bd.points}", kind=bd.kind, row=rows[-1])
+            Event(
+                text=f"{bd.label} +{bd.points}", kind=bd.kind, row=rows[-1], lines=count
+            )
         )
 
         self.board.collapse()
@@ -529,6 +547,7 @@ class Tetris:
 
 
 __all__ = [
+    "DANGER_TOP_ROWS",
     "FLASH_FRAMES",
     "LOCK_DELAY",
     "LOCK_RESET_MAX",

@@ -544,6 +544,17 @@ class TestLineClearing:
         t.tick(1.0)
         assert t.piece.y == y0
 
+    def test_clear_event_carries_line_count(self) -> None:
+        """P25: clear events carry how many rows the lock cleared, so the
+        UI can tell a B2B-qualifying T-spin (2+ lines) from a no-line one
+        (0, which leaves the back-to-back streak untouched)."""
+        t = Tetris()
+        t.events.clear()
+        fill_row(t, BOARD_H - 1)
+        t.pending_clears = [BOARD_H - 1]
+        t._commit_clears()
+        assert t.events and t.events[-1].lines == 1
+
 
 # ---------------------------------------------------------------------------
 # Scoring extras: combos & back-to-back
@@ -710,6 +721,16 @@ class TestCollision:
     def test_collision_out_of_bounds(self) -> None:
         t = Tetris()
         assert t._collides(Piece("O", x=BOARD_W - 1, y=3))
+
+    def test_stack_top(self) -> None:
+        """P24: stack_top is the topmost row holding a settled cell (or
+        None on an empty board) — the UI's danger bar rides on it."""
+        t = Tetris()
+        assert t.stack_top is None
+        fill_row(t, BOARD_H - 1)
+        assert t.stack_top == BOARD_H - 1
+        fill_row(t, 3)
+        assert t.stack_top == 3
 
 
 # ---------------------------------------------------------------------------
