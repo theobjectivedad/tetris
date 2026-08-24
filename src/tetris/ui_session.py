@@ -69,6 +69,10 @@ class Effects:
         self.spin_flash: tuple[tuple[int, int], float] | None = None
         # P22: the just-locked cells and the time the flash expires.
         self.lock_flash: tuple[frozenset[tuple[int, int]], float] | None = None
+        # P26: timestamped beeps queued by pattern(); pump() fires each
+        # one on its frame. The terminal bell is a single tone, so a
+        # "sound" is count + rhythm, not pitch.
+        self.beep_times: list[float] = []
         self.sound = True  # gated per frame from the user's sound setting
         self.shake_on = True  # gated per frame from the user's shake setting
 
@@ -77,6 +81,25 @@ class Effects:
         self.shake_until = 0.0
         self.spin_flash = None
         self.lock_flash = None
+        self.beep_times.clear()
+
+    def pattern(self, now: float, offsets: tuple[float, ...]) -> None:
+        """P26: queue a beep pattern — ``offsets`` relative to ``now``
+        (e.g. (0, 0.18, 0.42) for the game-over sting). Gated by the
+        sound setting, which the session syncs each frame."""
+        if not self.sound:
+            return
+        self.beep_times.extend(now + o for o in offsets)
+
+    def pump(self, now: float) -> None:
+        """P26: fire every queued beep whose time has come."""
+        self.beep_times.sort()
+        while self.beep_times and self.beep_times[0] <= now:
+            self.beep_times.pop(0)
+            try:
+                curses.beep()
+            except curses.error:
+                pass
 
     def on_events(self, events: list[Event], now: float) -> None:
         for ev in events:
@@ -149,6 +172,10 @@ class Session:
         # P20: the board's top score before this game started — the live
         # NEW BEST indicator fires when the score passes it.
         self.best_at_start = self.state.best()
+        # P26/P27: the game-over sting fires once per finished live game
+        # (the flip detector); the new-best jingle plays once per game.
+        self.was_over = False
+        self._new_best_fired = False
         # Sprint bookkeeping (P11): recorded once when a sprint game ends.
         self.sprint_handled = False
         self.sprint_new_best = False
@@ -194,6 +221,8 @@ class Session:
         self.new_best = False
         self.rank = None
         self.best_at_start = self.state.best()
+        self.was_over = False
+        self._new_best_fired = False
         self.sprint_handled = False
         self.sprint_new_best = False
         self.sprint_best = None
@@ -591,6 +620,26 @@ class Session:
                 self.effects.floaters.append(
                     ("B2B", min(BOARD_H - 2, ev.row + 1), now)
                 )
+        # P26: the game-over sting — once, on the flip of a live game
+        # (never the replayed engine's own end: while a replay runs the
+        # live game's state is frozen, so the flip detector stands down
+        # and was_over keeps its value). A sprint win gets the brisk,
+        # rising pattern; a loss or top-out the slow, descending one.
+        if self.replay_engine is None:
+            if self.engine.game_over and not self.was_over:
+                self.effects.pattern(
+                    now, (0.0, 0.1, 0.2) if self.engine.won else (0.0, 0.18, 0.42)
+                )
+            self.was_over = self.engine.game_over
+            # P27: the new-best jingle — once, the frame the live score
+            # first passes the pre-game best: a center-board floater plus
+            # a brisk three-beep.
+            if not self._new_best_fired and self._live_new_best():
+                self._new_best_fired = True
+                self.effects.floaters.append(("NEW BEST!", BOARD_H // 2, now))
+                self.effects.pattern(now, (0.0, 0.08, 0.16))
+        # Pump last: the patterns queued this frame fire on this frame.
+        self.effects.pump(now)
 
     # -- game-over bookkeeping --------------------------------------------
 

@@ -11,11 +11,12 @@ on.
 from __future__ import annotations
 
 import curses
+import json
 
 import pytest
 
 from tetris.engine import Event, Tetris
-from tetris.pieces import BOARD_W
+from tetris.pieces import BOARD_H, BOARD_W
 from tetris.ui_session import LOCK_FLASH_SECONDS, Session
 
 
@@ -250,3 +251,118 @@ def test_b2b_stat_glows_when_active(monkeypatch, tmp_path) -> None:
     scr2 = FakeScreen()
     s2.on_frame(scr2, 1.0)
     assert not (scr2.grid_attr.get((12, 17), 0) & curses.A_BOLD)
+
+
+# ---------------------------------------------------------------------------
+# P26: game-over sting
+# ---------------------------------------------------------------------------
+
+
+def _seed_best_score(tmp_path, score: int) -> None:
+    """A state file with one score-table entry (the pre-game best)."""
+    (tmp_path / "state.json").write_text(
+        json.dumps(
+            {
+                "scores": [
+                    {"name": "X", "score": score, "lines": 1, "level": 1,
+                     "date": "2026-01-01 10:00"}
+                ],
+                "settings": {},
+            }
+        )
+    )
+
+
+def test_game_over_sting_fires_once(monkeypatch, tmp_path) -> None:
+    """A classic game-over flip queues the slow 3-beep sting
+    (0, 0.18, 0.42 s); the pump fires each beep on its frame, and the
+    sting plays once — a further frame queues nothing new."""
+    s = _session(monkeypatch, tmp_path)
+    beeps: list[int] = []
+    monkeypatch.setattr(curses, "beep", lambda *a: beeps.append(1))
+    s.engine.game_over = True
+    s._apply_effects(10.0)  # the t=0 offset fires immediately
+    assert beeps == [1]
+    assert s.effects.beep_times == pytest.approx([10.18, 10.42])
+    s._apply_effects(10.3)
+    assert len(beeps) == 2
+    s._apply_effects(10.5)
+    assert len(beeps) == 3
+    assert not s.effects.beep_times
+    s._apply_effects(11.0)
+    assert len(beeps) == 3  # no re-sting
+
+
+def test_sprint_win_uses_rising_sting(monkeypatch, tmp_path) -> None:
+    """A sprint win (won=True game-over flip) queues the brisk, rising
+    pattern instead of the slow one."""
+    s = _session(monkeypatch, tmp_path)
+    s.engine.won = True
+    s.engine.game_over = True
+    s._apply_effects(10.0)
+    assert s.effects.beep_times == pytest.approx([10.1, 10.2])
+    assert s.was_over
+
+
+def test_replayed_game_over_does_not_sting(monkeypatch, tmp_path) -> None:
+    """The replayed engine's own top-out never re-triggers the sting —
+    the original game already played it, and while a replay runs the
+    live game's flip detector stands down."""
+    s = _session(monkeypatch, tmp_path)
+    beeps: list[int] = []
+    monkeypatch.setattr(curses, "beep", lambda *a: beeps.append(1))
+    s.engine.game_over = True
+    s._apply_effects(1.0)  # the original game's sting
+    assert beeps == [1]
+    # Simulate a replay that tops out: the engine swaps to the replay
+    # engine, which ends in game over.
+    s.replay_original = s.engine
+    s.replay_engine = Tetris()
+    s.engine = s.replay_engine
+    s.replay_engine.game_over = True
+    s._apply_effects(2.0)
+    assert len(beeps) == 3  # the two queued stings fired; nothing new
+    assert not s.effects.beep_times
+    # ...and after the replay restores the original (already-over)
+    # engine, no third sting either.
+    s.replay_engine = None
+    s.engine = s.replay_original
+    s._apply_effects(3.0)
+    assert len(beeps) == 3
+
+
+# ---------------------------------------------------------------------------
+# P27: new-best jingle
+# ---------------------------------------------------------------------------
+
+
+def test_new_best_jingle_fires_once(monkeypatch, tmp_path) -> None:
+    """The frame the live score first passes the pre-game best: a
+    'NEW BEST!' floater at the board center plus a brisk 3-beep; the
+    floater appears exactly once per game."""
+    _seed_best_score(tmp_path, 5000)
+    s = _session(monkeypatch, tmp_path)
+    assert s.best_at_start == 5000
+    beeps: list[int] = []
+    monkeypatch.setattr(curses, "beep", lambda *a: beeps.append(1))
+    s.engine.score = 6000
+    s._apply_effects(5.0)  # the t=0 offset fires immediately
+    rows = [row for tx, row, _ in s.effects.floaters if tx == "NEW BEST!"]
+    assert rows == [BOARD_H // 2]
+    assert s._new_best_fired
+    assert beeps == [1]
+    s._apply_effects(6.0)
+    assert len(beeps) == 3
+    assert sum(
+        1 for tx, _, _ in s.effects.floaters if tx == "NEW BEST!"
+    ) == 1  # one floater, no second jingle
+
+
+def test_new_best_jingle_not_below_best(monkeypatch, tmp_path) -> None:
+    _seed_best_score(tmp_path, 5000)
+    s = _session(monkeypatch, tmp_path)
+    s.engine.score = 100  # well below the pre-game best
+    s._apply_effects(5.0)
+    assert not any(tx == "NEW BEST!" for tx, _, _ in s.effects.floaters)
+    assert not s._new_best_fired
+    assert not s.effects.beep_times
