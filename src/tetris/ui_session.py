@@ -14,6 +14,7 @@ from __future__ import annotations
 import curses
 import random
 import time
+from dataclasses import dataclass, field
 
 from .engine import DANGER_TOP_ROWS, Event, Tetris
 from .pieces import BOARD_H, BOARD_W
@@ -320,6 +321,50 @@ class ReplayController:
             engine.rotate_180(at)
 
 
+@dataclass
+class GameRun:
+    """Bookkeeping for one live game (rebuilt on every reset).
+
+    The engine is fully deterministic given (seed, actions, times), so
+    each game gets a seed and every accepted player action is logged
+    with its game-relative time; G at game over re-plays the last saved
+    replay (playback state itself lives in ReplayController). The rest
+    is score-record bookkeeping (top-10 rank, the pre-game best the
+    live NEW BEST indicator chases) and the one-shot "moment" flags
+    (game-over sting fired, new-best jingle fired, sprint result
+    recorded, the sprint second the tick beeper last saw).
+    """
+
+    seed: int
+    game_start: float
+    replay_events: list[tuple[float, str]] = field(default_factory=list)
+    replay_saved: bool = False
+    new_best: bool = False
+    rank: int | None = None
+    best_at_start: int = 0
+    was_over: bool = False
+    new_best_fired: bool = False
+    last_sprint_sec: int = -1
+    sprint_handled: bool = False
+    sprint_new_best: bool = False
+    sprint_best: float | None = None
+
+    @classmethod
+    def fresh(cls, now: float, state: GameState) -> GameRun:
+        """A fresh game starting at wall-clock time ``now``.
+
+        ``best_at_start`` is read now so the live NEW BEST indicator
+        fires when the score passes the board's top score before this
+        game (a just-finished game's score is already recorded by the
+        time a restart happens).
+        """
+        return cls(
+            seed=int(now * 1000) % 2**32,
+            game_start=now,
+            best_at_start=state.best(),
+        )
+
+
 class Session:
     """One play session: the state machine that used to be ``game_loop``.
 
@@ -340,36 +385,16 @@ class Session:
         init_colors(self.state.settings.theme)
         build_attrs()
 
-        # Replay (P9): the engine is fully deterministic given (seed, actions,
-        # times), so each game gets a seed, and every accepted player action
-        # is logged with its game-relative time. G at game over re-plays the
-        # last saved replay at 1× speed. Playback state lives in
-        # ReplayController; the log below belongs to this game's lifecycle.
-        self.seed = int(now * 1000) % 2**32
-        self.game_start = now
-        self.replay_events: list[tuple[float, str]] = []
-        self.replay_saved = False
+        # One play: seed, input log, score-record bookkeeping, and the
+        # one-shot "moment" flags (see GameRun). Rebuilt on every reset;
+        # replay *playback* state lives in ReplayController instead.
+        self.run = GameRun.fresh(now, self.state)
 
         self.engine = self.tetris_cls(
-            rng=random.Random(self.seed),
+            rng=random.Random(self.run.seed),
             start_level=self.state.settings.start_level,
             sprint=self.state.settings.mode == "sprint",
         )
-        self.new_best = False
-        self.rank: int | None = None
-        # P20: the board's top score before this game started — the live
-        # NEW BEST indicator fires when the score passes it.
-        self.best_at_start = self.state.best()
-        # P26/P27: the game-over sting fires once per finished live game
-        # (the flip detector); the new-best jingle plays once per game.
-        self.was_over = False
-        self._new_best_fired = False
-        # P28: the last sprint second the tick beeper saw (boundary
-        # detection for the final-5-s heartbeat).
-        self._last_sprint_sec = -1
-        self.sprint_handled = False
-        self.sprint_new_best = False
-        self.sprint_best: float | None = None
         self.reader = KeyReader()
         self.effects = Effects()
         self._replay = ReplayController(self)
@@ -392,25 +417,15 @@ class Session:
 
     def reset_game(self) -> None:
         # ``self.now`` is this frame's ``time.monotonic()`` (frame start).
-        self.seed = int(self.now * 1000) % 2**32
-        self.game_start = self.now
-        self.replay_events.clear()
-        self.replay_saved = False
+        # A fresh GameRun: new seed, empty input log, cleared moment
+        # flags, and the pre-game best re-read.
+        self.run = GameRun.fresh(self.now, self.state)
         self._replay.reset()
         self.engine = self.tetris_cls(
-            rng=random.Random(self.seed),
+            rng=random.Random(self.run.seed),
             start_level=self.state.settings.start_level,
             sprint=self.state.settings.mode == "sprint",
         )
-        self.new_best = False
-        self.rank = None
-        self.best_at_start = self.state.best()
-        self.was_over = False
-        self._new_best_fired = False
-        self._last_sprint_sec = -1
-        self.sprint_handled = False
-        self.sprint_new_best = False
-        self.sprint_best = None
         self.menu = None
         self.was_paused = False
         self.anim_start = None
@@ -436,8 +451,8 @@ class Session:
 
     def commit_name(self) -> None:
         """Store the typed name on the new high-score entry (if any)."""
-        if self.rank is not None:
-            self.state.set_entry_name(self.rank, self.typed_name)
+        if self.run.rank is not None:
+            self.state.set_entry_name(self.run.rank, self.typed_name)
         self.name_awaiting = False
 
     def log_action(self, token: str) -> None:
@@ -445,7 +460,7 @@ class Session:
         the token at this frame's game-relative time. Attempts are logged
         when the UI authorizes them (throttle passed) — the engine may
         still reject a move, which replays identically."""
-        self.replay_events.append((self.now - self.game_start, token))
+        self.run.replay_events.append((self.now - self.run.game_start, token))
 
     # -- replay (P9) ----------------------------------------------------
     #
@@ -615,8 +630,8 @@ class Session:
                 # pause handling below.
                 self.close_menu()
             elif self.engine.game_over:
-                if self.rank is not None:
-                    self.state.remove_entry(self.rank)
+                if self.run.rank is not None:
+                    self.state.remove_entry(self.run.rank)
                 self.reset_game()
             elif self.engine.paused:
                 self.engine.paused = False
@@ -767,16 +782,16 @@ class Session:
         # and was_over keeps its value). A sprint win gets the brisk,
         # rising pattern; a loss or top-out the slow, descending one.
         if not self._replay.active:
-            if self.engine.game_over and not self.was_over:
+            if self.engine.game_over and not self.run.was_over:
                 self.effects.pattern(
                     now, (0.0, 0.1, 0.2) if self.engine.won else (0.0, 0.18, 0.42)
                 )
-            self.was_over = self.engine.game_over
+            self.run.was_over = self.engine.game_over
             # P27: the new-best jingle — once, the frame the live score
             # first passes the pre-game best: a center-board floater plus
             # a brisk three-beep.
-            if not self._new_best_fired and self._live_new_best():
-                self._new_best_fired = True
+            if not self.run.new_best_fired and self._live_new_best():
+                self.run.new_best_fired = True
                 self.effects.floaters.append(("NEW BEST!", BOARD_H // 2, now))
                 self.effects.pattern(now, (0.0, 0.08, 0.16))
             # P28: sprint endgame tension — one tick beep on each second
@@ -788,9 +803,9 @@ class Session:
                 and self.engine.time_left is not None
             ):
                 sec = int(self.engine.time_left)
-                if sec != self._last_sprint_sec and 1 <= sec <= 5:
+                if sec != self.run.last_sprint_sec and 1 <= sec <= 5:
                     self.effects.pattern(now, (0.0,))
-                self._last_sprint_sec = sec
+                self.run.last_sprint_sec = sec
         # Pump last: the patterns queued this frame fire on this frame.
         self.effects.pump(now)
 
@@ -802,46 +817,46 @@ class Session:
         # writes the score table (P11) — its result is a best clear time.
         if (
             self.engine.game_over
-            and not self.new_best
-            and self.rank is None
+            and not self.run.new_best
+            and self.run.rank is None
             and not self.engine.sprint
             and self.engine.score > 0
         ):
-            self.rank = self.state.record(
+            self.run.rank = self.state.record(
                 self.engine.score, self.engine.lines, self.engine.level,
                 time_s=self.engine.play_time, best_combo=self.engine.best_combo,
             )
-            if self.rank is not None:
-                self.new_best = True
+            if self.run.rank is not None:
+                self.run.new_best = True
                 self.name_awaiting = True
 
         # Sprint result (P11): recorded once. A win stores the clear time
         # (lower is better); a loss just surfaces the existing best.
-        if self.engine.game_over and self.engine.sprint and not self.sprint_handled:
-            self.sprint_handled = True
+        if self.engine.game_over and self.engine.sprint and not self.run.sprint_handled:
+            self.run.sprint_handled = True
             if self.engine.won:
-                self.sprint_new_best, self.sprint_best = self.state.record_sprint(
-                    self.engine.play_time
+                self.run.sprint_new_best, self.run.sprint_best = (
+                    self.state.record_sprint(self.engine.play_time)
                 )
             else:
-                self.sprint_best = self.state.best_sprint_time()
+                self.run.sprint_best = self.state.best_sprint_time()
 
         # Replay (P9): save the finished game's input log once, if the
         # player actually played it (at least one authorized action).
-        if self.engine.game_over and not self.replay_saved and self.replay_events:
-            self.replay_saved = True
+        if self.engine.game_over and not self.run.replay_saved and self.run.replay_events:
+            self.run.replay_saved = True
             self.state.save_replay(
                 {
-                    "seed": self.seed,
+                    "seed": self.run.seed,
                     "start_level": self.state.settings.start_level,
                     "sprint": self.engine.sprint,
                     "das": self.state.settings.das,
                     "arr": self.state.settings.arr,
-                    "started_at": self.game_start,
+                    "started_at": self.run.game_start,
                     "date": time.strftime("%Y-%m-%d %H:%M"),
                     "score": self.engine.score,
                     "lines": self.engine.lines,
-                    "events": self.replay_events,
+                    "events": self.run.replay_events,
                 }
             )
 
@@ -854,7 +869,7 @@ class Session:
             not self.engine.game_over
             and not self.engine.sprint
             and self.engine.score > 0
-            and self.engine.score > self.best_at_start
+            and self.engine.score > self.run.best_at_start
         )
 
     def _start_spawn_glide(self, now: float) -> None:
@@ -976,7 +991,7 @@ class Session:
             now < self.effects.hold_flash_until,  # P29: the un-flash frame
             now < self.effects.rotate_flash_until,  # P30: same
             self.menu, self.menu_cursor, self.typed_name, self.name_awaiting,  # modal content
-            self.new_best, self.rank, self._live_new_best(),
+            self.run.new_best, self.run.rank, self._live_new_best(),
             self.state.settings.ghost, self.state.settings.hold,
             self.state.settings.theme,  # live recolor on switch (P12)
             # Sprint countdown (P11): the displayed second changes once per
@@ -1069,7 +1084,7 @@ class Session:
                     pass
 
         draw_stats_panel(
-            stdscr, self.engine, by, block_x, self.new_best or self._live_new_best()
+            stdscr, self.engine, by, block_x, self.run.new_best or self._live_new_best()
         )
         draw_sidebar(
             stdscr, self.engine, self.state, by, bx + sidebar_x_offset,
@@ -1105,7 +1120,9 @@ class Session:
             elif self.engine.sprint:
                 draw_modal(
                     stdscr,
-                    build_sprint_modal(self.engine, self.sprint_new_best, self.sprint_best),
+                    build_sprint_modal(
+                        self.engine, self.run.sprint_new_best, self.run.sprint_best
+                    ),
                     max_x,
                     max_y,
                 )
@@ -1113,8 +1130,8 @@ class Session:
                 draw_modal(
                     stdscr,
                     build_game_over_modal(
-                        self.engine, self.state.best(), self.rank, self.typed_name,
-                        self.name_awaiting, self.seed,
+                        self.engine, self.state.best(), self.run.rank,
+                        self.typed_name, self.name_awaiting, self.run.seed,
                     ),
                     max_x,
                     max_y,
@@ -1132,4 +1149,4 @@ class Session:
             draw_modal(stdscr, build_pause_modal(), max_x, max_y)
 
 
-__all__ = ["SPAWN_ANIM_SECONDS", "Effects", "ReplayController", "Session"]
+__all__ = ["SPAWN_ANIM_SECONDS", "Effects", "GameRun", "ReplayController", "Session"]

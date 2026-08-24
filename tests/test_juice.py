@@ -301,7 +301,7 @@ def test_sprint_win_uses_rising_sting(monkeypatch, tmp_path) -> None:
     s.engine.game_over = True
     s._apply_effects(10.0)
     assert s.effects.beep_times == pytest.approx([10.1, 10.2])
-    assert s.was_over
+    assert s.run.was_over
 
 
 def test_replayed_game_over_does_not_sting(monkeypatch, tmp_path) -> None:
@@ -342,14 +342,14 @@ def test_new_best_jingle_fires_once(monkeypatch, tmp_path) -> None:
     floater appears exactly once per game."""
     _seed_best_score(tmp_path, 5000)
     s = _session(monkeypatch, tmp_path)
-    assert s.best_at_start == 5000
+    assert s.run.best_at_start == 5000
     beeps: list[int] = []
     monkeypatch.setattr(curses, "beep", lambda *a: beeps.append(1))
     s.engine.score = 6000
     s._apply_effects(5.0)  # the t=0 offset fires immediately
     rows = [row for tx, row, _ in s.effects.floaters if tx == "NEW BEST!"]
     assert rows == [BOARD_H // 2]
-    assert s._new_best_fired
+    assert s.run.new_best_fired
     assert beeps == [1]
     s._apply_effects(6.0)
     assert len(beeps) == 3
@@ -364,7 +364,7 @@ def test_new_best_jingle_not_below_best(monkeypatch, tmp_path) -> None:
     s.engine.score = 100  # well below the pre-game best
     s._apply_effects(5.0)
     assert not any(tx == "NEW BEST!" for tx, _, _ in s.effects.floaters)
-    assert not s._new_best_fired
+    assert not s.run.new_best_fired
     assert not s.effects.beep_times
 
 
