@@ -54,6 +54,10 @@ SPIN_FLASH_SECONDS = 0.6
 BIG_SHAKE_SECONDS = 0.2
 # how long the just-locked cells flash after a no-clear lock (P22)
 LOCK_FLASH_SECONDS = 0.12
+# how long the HOLD box flashes after an accepted hold (P29)
+HOLD_FLASH_SECONDS = 0.2
+# how long the piece highlights after a successful rotation (P30)
+ROTATE_FLASH_SECONDS = 0.1
 
 # Beeps per effect kind.
 _BEEPS = {"clear": 1, "tetris": 2, "tspin": 3, "tspin-mini": 2, "levelup": 2}
@@ -69,6 +73,9 @@ class Effects:
         self.spin_flash: tuple[tuple[int, int], float] | None = None
         # P22: the just-locked cells and the time the flash expires.
         self.lock_flash: tuple[frozenset[tuple[int, int]], float] | None = None
+        # P29/P30: flash windows for the HOLD box and a fresh rotation.
+        self.hold_flash_until = 0.0
+        self.rotate_flash_until = 0.0
         # P26: timestamped beeps queued by pattern(); pump() fires each
         # one on its frame. The terminal bell is a single tone, so a
         # "sound" is count + rhythm, not pitch.
@@ -81,6 +88,8 @@ class Effects:
         self.shake_until = 0.0
         self.spin_flash = None
         self.lock_flash = None
+        self.hold_flash_until = 0.0
+        self.rotate_flash_until = 0.0
         self.beep_times.clear()
 
     def pattern(self, now: float, offsets: tuple[float, ...]) -> None:
@@ -176,7 +185,9 @@ class Session:
         # (the flip detector); the new-best jingle plays once per game.
         self.was_over = False
         self._new_best_fired = False
-        # Sprint bookkeeping (P11): recorded once when a sprint game ends.
+        # P28: the last sprint second the tick beeper saw (boundary
+        # detection for the final-5-s heartbeat).
+        self._last_sprint_sec = -1
         self.sprint_handled = False
         self.sprint_new_best = False
         self.sprint_best: float | None = None
@@ -223,6 +234,7 @@ class Session:
         self.best_at_start = self.state.best()
         self.was_over = False
         self._new_best_fired = False
+        self._last_sprint_sec = -1
         self.sprint_handled = False
         self.sprint_new_best = False
         self.sprint_best = None
@@ -566,7 +578,13 @@ class Session:
             elif key in (ord("c"), ord("C")):
                 self.log_action("C")
                 if self.state.settings.hold:
+                    can = self.engine.can_hold
                     self.engine.hold()
+                    # P29: an accepted hold (grab or swap) flips can_hold
+                    # to False and flashes the HOLD box; rejected holds
+                    # (window, frozen, hold-off) leave it True.
+                    if can and not self.engine.can_hold:
+                        self.effects.hold_flash_until = now + HOLD_FLASH_SECONDS
 
         return False
 
@@ -638,6 +656,18 @@ class Session:
                 self._new_best_fired = True
                 self.effects.floaters.append(("NEW BEST!", BOARD_H // 2, now))
                 self.effects.pattern(now, (0.0, 0.08, 0.16))
+            # P28: sprint endgame tension — one tick beep on each second
+            # boundary during the final five seconds (the per-second
+            # scene-key quantization already redraws on each flip).
+            if (
+                self.engine.sprint
+                and not self.engine.game_over
+                and self.engine.time_left is not None
+            ):
+                sec = int(self.engine.time_left)
+                if sec != self._last_sprint_sec and 1 <= sec <= 5:
+                    self.effects.pattern(now, (0.0,))
+                self._last_sprint_sec = sec
         # Pump last: the patterns queued this frame fire on this frame.
         self.effects.pump(now)
 
@@ -820,6 +850,8 @@ class Session:
                 and self.menu is None
             )
             else 0,
+            now < self.effects.hold_flash_until,  # P29: the un-flash frame
+            now < self.effects.rotate_flash_until,  # P30: same
             self.menu, self.menu_cursor, self.typed_name, self.name_awaiting,  # modal content
             self.new_best, self.rank, self._live_new_best(),
             self.state.settings.ghost, self.state.settings.hold,
@@ -915,7 +947,10 @@ class Session:
         draw_stats_panel(
             stdscr, self.engine, by, block_x, self.new_best or self._live_new_best()
         )
-        draw_sidebar(stdscr, self.engine, self.state, by, bx + sidebar_x_offset)
+        draw_sidebar(
+            stdscr, self.engine, self.state, by, bx + sidebar_x_offset,
+            hold_flash=now < self.effects.hold_flash_until,
+        )
 
         # Spawn glide: drawn last among the non-modal elements, so it can
         # legitimately overlap the board's right wall while flying in.

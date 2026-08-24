@@ -409,25 +409,45 @@ def build_scores_modal(state: GameState) -> Modal:
     return Modal("HIGH SCORES", lines)
 
 
-def draw_box(stdscr: curses.window, title: str, bx: int, by: int, w: int, h: int = 6) -> tuple[int, int]:
-    """Draw a titled box; returns (inner_x, inner_y)."""
+def draw_box(
+    stdscr: curses.window,
+    title: str,
+    bx: int,
+    by: int,
+    w: int,
+    h: int = 6,
+    attr: int | None = None,
+) -> tuple[int, int]:
+    """Draw a titled box; returns (inner_x, inner_y).
+
+    ``attr`` overrides the border attribute (P29: the HOLD box flashes in
+    the highlight accent while a hold was just accepted).
+    """
     border = f"┌{'─' * (w - 2)}┐"
+    border_attr = BORDER_ATTR if attr is None else attr
     try:
-        stdscr.addstr(by, bx, border, BORDER_ATTR)
-        stdscr.addstr(by + 1, bx, f"│ {title:<{w - 4}} │", BORDER_ATTR)
+        stdscr.addstr(by, bx, border, border_attr)
+        stdscr.addstr(by + 1, bx, f"│ {title:<{w - 4}} │", border_attr)
         for i in range(h - 3):
             # Borders keep BORDER_ATTR; the interior run gets the panel
             # background (a no-op fill when colors are unavailable).
-            stdscr.addstr(by + 2 + i, bx, "│", BORDER_ATTR)
+            stdscr.addstr(by + 2 + i, bx, "│", border_attr)
             stdscr.addstr(by + 2 + i, bx + 1, " " * (w - 2), BG_ATTR)
-            stdscr.addstr(by + 2 + i, bx + w - 1, "│", BORDER_ATTR)
-        stdscr.addstr(by + h - 1, bx, f"└{'─' * (w - 2)}┘", BORDER_ATTR)
+            stdscr.addstr(by + 2 + i, bx + w - 1, "│", border_attr)
+        stdscr.addstr(by + h - 1, bx, f"└{'─' * (w - 2)}┘", border_attr)
     except curses.error:
         pass
     return bx + 2, by + 2
 
 
-def draw_piece_preview(stdscr: curses.window, kind: str, ix: int, iy: int, dim: bool = False) -> None:
+def draw_piece_preview(
+    stdscr: curses.window,
+    kind: str,
+    ix: int,
+    iy: int,
+    dim: bool = False,
+    attr: int | None = None,
+) -> None:
     if kind not in PIECES:
         return
     cells = PIECES[kind][0]
@@ -442,7 +462,10 @@ def draw_piece_preview(stdscr: curses.window, kind: str, ix: int, iy: int, dim: 
             if (x, y) in cells:
                 txt = "██"
                 try:
-                    if dim:
+                    if attr is not None:
+                        # P29: an explicit override (the hold-box flash).
+                        stdscr.addstr(iy + (y - top), ox + (x - left) * BOARD_PITCH, txt, attr)
+                    elif dim:
                         stdscr.addstr(iy + (y - top), ox + (x - left) * BOARD_PITCH, txt, curses.A_DIM)
                     else:
                         stdscr.addstr(iy + (y - top), ox + (x - left) * BOARD_PITCH, txt, cell_attr(kind))
@@ -607,9 +630,12 @@ def draw_stats_panel(stdscr: curses.window, engine: Tetris, by: int, x: int, new
     legend and version live in the help modal (`?`) instead."""
     for i, (label, value) in enumerate(panel_stats(engine.snapshot(), sprint=engine.sprint)):
         value_attr = STAT_ATTR
-        # Sprint (P11): blink the countdown once 30 s or less remain.
+        # Sprint (P11): blink the countdown once 30 s or less remain...
         if engine.sprint and label == "TIME" and engine.time_left is not None and engine.time_left <= 30:
             value_attr = STAT_ATTR | curses.A_BLINK
+        # ...and turn it red in the danger color for the final 10 s (P28).
+        if engine.sprint and label == "TIME" and engine.time_left is not None and engine.time_left <= 10:
+            value_attr = DANGER_ATTR | curses.A_BLINK
         # P25: an active back-to-back streak glows in the highlight color.
         if label == "B2B" and engine.b2b:
             value_attr = HILITE_ATTR
@@ -628,11 +654,26 @@ def draw_stats_panel(stdscr: curses.window, engine: Tetris, by: int, x: int, new
             pass
 
 
-def draw_sidebar(stdscr: curses.window, engine: Tetris, state: GameState, by: int, sx: int) -> None:
-    """The right column: the HOLD box at ``sx`` and the NEXT box below it."""
-    hold_x, hold_y = draw_box(stdscr, "HOLD", sx, by, HOLD_W, 6)
+def draw_sidebar(
+    stdscr: curses.window,
+    engine: Tetris,
+    state: GameState,
+    by: int,
+    sx: int,
+    hold_flash: bool = False,
+) -> None:
+    """The right column: the HOLD box at ``sx`` and the NEXT box below it.
+
+    ``hold_flash`` (P29): draw the HOLD box border and its preview in the
+    highlight accent while a hold was just accepted.
+    """
+    flash_attr = HILITE_ATTR if hold_flash else None
+    hold_x, hold_y = draw_box(stdscr, "HOLD", sx, by, HOLD_W, 6, attr=flash_attr)
     if state.settings.hold:
-        draw_piece_preview(stdscr, engine.holding or "", hold_x, hold_y, dim=not engine.can_hold)
+        draw_piece_preview(
+            stdscr, engine.holding or "", hold_x, hold_y,
+            dim=not engine.can_hold, attr=flash_attr,
+        )
     else:
         # Hold disabled: show a dimmed "off" in the box instead of a preview.
         try:

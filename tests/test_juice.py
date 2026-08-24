@@ -366,3 +366,78 @@ def test_new_best_jingle_not_below_best(monkeypatch, tmp_path) -> None:
     assert not any(tx == "NEW BEST!" for tx, _, _ in s.effects.floaters)
     assert not s._new_best_fired
     assert not s.effects.beep_times
+
+
+# ---------------------------------------------------------------------------
+# P28: sprint urgency
+# ---------------------------------------------------------------------------
+
+
+def _session_sprint(monkeypatch, tmp_path) -> Session:
+    """A real Session configured for sprint mode (settings.mode = sprint)."""
+    (tmp_path / "state.json").write_text(
+        json.dumps({"scores": [], "settings": {"mode": "sprint"}})
+    )
+    return _session(monkeypatch, tmp_path)
+
+
+def test_sprint_ticks_in_final_seconds(monkeypatch, tmp_path) -> None:
+    """A live sprint beeps once per second boundary during the final
+    five seconds (1..5) and stays silent outside them."""
+    s = _session_sprint(monkeypatch, tmp_path)
+    beeps: list[int] = []
+    monkeypatch.setattr(curses, "beep", lambda *a: beeps.append(1))
+    assert s.engine.sprint
+    s.engine.time_left = 30.5
+    s._apply_effects(100.0)  # outside the final five: silent
+    assert not beeps
+    for sec in (5, 4, 3, 2, 1):
+        s.engine.time_left = float(sec) + 0.25
+        s._apply_effects(100.0 + float(sec))
+        assert len(beeps) == 5 - sec + 1
+    # The 0 boundary (game over) belongs to the sting, not the tick.
+    s.engine.time_left = 0.25
+    s._apply_effects(200.0)
+    assert len(beeps) == 5
+
+
+def test_sprint_timer_turns_danger_in_final_ten(monkeypatch, tmp_path) -> None:
+    """The sprint TIME stat uses the danger attr while 10 s or less
+    remain (on top of the 30-s-or-less blink), plain above that."""
+    import tetris.ui_render as ur
+
+    monkeypatch.setattr(ur, "DANGER_ATTR", 0x4000)  # a visible sentinel
+    s = _session_sprint(monkeypatch, tmp_path)
+    scr = FakeScreen()
+    s.engine.time_left = 9.5
+    s.on_frame(scr, 100.0)
+    # The TIME row is the last stat (index 5): by + 2 + 5 = 13; the value
+    # sits at block_x + 7 = 17 (x = (80 - 60) // 2).
+    assert scr.grid_attr.get((13, 17), 0) & 0x4000
+    s.engine.time_left = 25.0
+    s.on_frame(scr, 101.0)
+    assert not (scr.grid_attr.get((13, 17), 0) & 0x4000)
+
+
+# ---------------------------------------------------------------------------
+# P29: hold flash
+# ---------------------------------------------------------------------------
+
+
+def test_hold_flash_on_accepted_hold(monkeypatch, tmp_path) -> None:
+    """An accepted hold flips can_hold and opens the P29 flash window —
+    the frame draws the HOLD box border in the highlight accent (bold on
+    this monochrome session). A rejected second hold does not re-flash."""
+    s = _session(monkeypatch, tmp_path)
+    scr = FakeScreen()
+    scr.keys.append(ord("c"))
+    s.on_frame(scr, 1.0)
+    assert not s.engine.can_hold
+    assert 1.0 < s.effects.hold_flash_until <= 1.0 + 0.2
+    # The HOLD box's top-left border: sx = bx + 26 = 56, top row by = 6.
+    assert scr.grid_attr.get((6, 56), 0) & curses.A_BOLD
+    # A second hold is rejected (window) — no fresh flash.
+    before = s.effects.hold_flash_until
+    scr.keys.append(ord("c"))
+    s.on_frame(scr, 1.2)
+    assert s.effects.hold_flash_until == before
