@@ -865,7 +865,7 @@ def test_bg_panel_attr_on_board_and_boxes(monkeypatch) -> None:
     assert scr.grid_attr[(6 + 10, 20 + 1)] == bg
     assert scr.grid_attr[(6 + 19, 20 + 19)] == bg
     # The top border row keeps the border attr, not the bg fill.
-    assert scr.grid_attr[(6, 20)] == main.BORDER_ATTR
+    assert scr.grid_attr[(6, 20)] == main.ATTRS.border
 
     main.draw_box(scr, "HOLD", 46, 6, 14, 6)
     # Box interior (row by+2, first inner col) carries the bg attr.

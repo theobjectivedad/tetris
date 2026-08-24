@@ -10,6 +10,7 @@ board, sidebar, and stats-panel draw functions.
 from __future__ import annotations
 
 import curses
+from dataclasses import dataclass, field
 
 from . import __version__
 from .engine import SPRINT_LINES, Tetris
@@ -26,30 +27,49 @@ from .themes import DEFAULT_THEME, THEMES
 # pair (10) and the border/background pairs (11/12) are fixed.
 COLORS: dict[str, int] = {"I": 1, "O": 2, "T": 3, "S": 4, "Z": 5, "J": 6, "L": 7}
 
-# Border: gray 231 (a gray none of the pieces use) on capable terminals;
-# on terminals with fewer colors ncurses maps the pair to the nearest
-# available colors (the default foreground — always readable). A_DIM
-# remains the no-color fallback.
-BORDER_ATTR = curses.A_DIM
+# Fixed color pairs (not part of the themes): the flash, border,
+# danger, and background pairs. Border: gray 231 (a gray none of the
+# pieces use) on capable terminals; on terminals with fewer colors
+# ncurses maps the pair to the nearest available colors (the default
+# foreground — always readable). The danger bar (P24) is white on red —
+# it recolors the top border while the stack nears the ceiling. The
+# background (a very dark gray, ext 235) is a subtle depth fill that
+# becomes a no-op where the color is unmappable.
 BORDER_PAIR = 11
-# Danger bar (P24): white on red — fixed like the flash pair, recoloring
-# the top border while the stack nears the ceiling. A_BLINK is the
-# no-color fallback (a blinking bar still reads as a warning).
 DANGER_PAIR = 13
-DANGER_ATTR = curses.A_BLINK
-# Board/panel background pair: a very dark gray (ext 235) — a subtle
-# depth fill that becomes a no-op where the color is unmappable.
 BG_PAIR = 12
 
-# Cached attributes, filled in by build_attrs() after init_colors(): the
-# render path used to call has_colors()/color_pair() (C crossings) per
-# cell — 20-60 times a frame. build_attrs() replaces that with plain
-# lookups.
-CELL_ATTRS: dict[str, int] = {}
-FLASH_ATTR = 0   # flash row (pair 10: white on yellow)
-STAT_ATTR = 0    # stats panel text (pair 8)
-HILITE_ATTR = 0  # highlight pair (9): lock/rotation flash, hold flash, active B2B (P22/P29/P30/P25)
-BG_ATTR = 0      # board/panel background fill (pair 12)
+
+@dataclass
+class AttrCache:
+    """Cached render attributes (R5) — one object owns what were seven
+    module-level rebinding globals.
+
+    Defaults are the no-color fallbacks (``border`` = A_DIM, ``danger``
+    = A_BLINK — a blinking bar still reads as a warning — the rest 0).
+    ``init_colors()`` + ``build_attrs()`` fill in the color pairs once a
+    live screen exists (and again after a live theme switch). The render
+    path reads plain fields: no ``global`` statements, no rebinding, and
+    no stale re-exports — ``main.ATTRS`` and ``ui_render.ATTRS`` are the
+    same object. Tests patch individual fields (e.g. ``ATTRS.danger``)
+    as a seam.
+    """
+
+    cells: dict[str, int] = field(default_factory=dict)  # per piece kind
+    flash: int = 0  # flash row (pair 10: white on yellow)
+    stat: int = 0  # stats panel text (pair 8)
+    # highlight pair (9): lock/rotation flash, hold flash, active B2B
+    # (P22/P29/P30/P25)
+    hilite: int = 0
+    bg: int = 0  # board/panel background fill (pair 12)
+    border: int = curses.A_DIM  # board/box border (pair 11: gray 231)
+    danger: int = curses.A_BLINK  # danger bar (pair 13: white on red)
+
+
+# The single attribute cache, filled by build_attrs() after init_colors():
+# the render path used to call has_colors()/color_pair() (C crossings) per
+# cell — 20-60 times a frame. Plain field reads replace that.
+ATTRS = AttrCache()
 
 # -- drawn geometry and layout ------------------------------------------------
 #
@@ -86,14 +106,14 @@ def init_colors(theme: str = "classic") -> None:
     highlight 9; unknown names fall back to classic) — safe to re-run
     live when the theme setting changes, as curses allows re-initing a
     pair (re-run build_attrs() afterwards to refresh cached attrs). The
-    flash pair (10) and the border/background pairs (11/12) are fixed.
+    flash pair (10) and the border/danger/background pairs (11/13/12)
+    are fixed.
     """
-    global BORDER_ATTR, DANGER_ATTR
     if not curses.has_colors():
         return
     t = THEMES.get(theme, THEMES[DEFAULT_THEME])
     curses.start_color()
-    pairs = {
+    for i, fg in {
         1: t.cells["I"],
         2: t.cells["O"],
         3: t.cells["T"],
@@ -103,13 +123,10 @@ def init_colors(theme: str = "classic") -> None:
         7: t.cells["L"],
         8: t.text,
         9: t.highlight,
-        10: curses.COLOR_BLACK,  # flash (fixed: white on yellow)
-    }
-    for i, fg in pairs.items():
-        if i == 10:
-            curses.init_pair(i, curses.COLOR_WHITE, curses.COLOR_YELLOW)
-        else:
-            curses.init_pair(i, fg, curses.COLOR_BLACK)
+    }.items():
+        curses.init_pair(i, fg, curses.COLOR_BLACK)
+    # The flash pair is fixed (white on yellow) — not part of the theme.
+    curses.init_pair(10, curses.COLOR_WHITE, curses.COLOR_YELLOW)
     # NOTE: never use A_REVERSE for the border — with a white-fg/black-bg
     # default it swaps to a black bar (invisible). (Some _curses builds
     # lack color_count(), so this intentionally does not branch on it —
@@ -117,34 +134,28 @@ def init_colors(theme: str = "classic") -> None:
     curses.init_pair(BORDER_PAIR, 231, curses.COLOR_BLACK)
     curses.init_pair(DANGER_PAIR, curses.COLOR_WHITE, curses.COLOR_RED)
     curses.init_pair(BG_PAIR, curses.COLOR_BLACK, 235)
-    BORDER_ATTR = curses.color_pair(BORDER_PAIR)
-    DANGER_ATTR = curses.color_pair(DANGER_PAIR)
+    ATTRS.border = curses.color_pair(BORDER_PAIR)
+    ATTRS.danger = curses.color_pair(DANGER_PAIR)
 
 
 def build_attrs() -> None:
-    """Cache the per-kind/global attrs after init_colors() has run
+    """Fill the attribute cache after init_colors() has run
     (color_pair() needs a live curses screen)."""
-    global FLASH_ATTR, STAT_ATTR, HILITE_ATTR, BG_ATTR
+    colors = curses.has_colors()
     for kind, pair in COLORS.items():
-        CELL_ATTRS[kind] = curses.color_pair(pair) if curses.has_colors() else 0
-    FLASH_ATTR = curses.color_pair(10) if curses.has_colors() else 0
-    STAT_ATTR = curses.color_pair(8) if curses.has_colors() else 0
+        ATTRS.cells[kind] = curses.color_pair(pair) if colors else 0
+    ATTRS.flash = curses.color_pair(10) if colors else 0
+    ATTRS.stat = curses.color_pair(8) if colors else 0
     # The highlight pair is latent in the themes' rendering; as a flash
     # accent it needs a visible fallback on monochrome terminals — bold
     # brightens the default foreground.
-    HILITE_ATTR = curses.color_pair(9) if curses.has_colors() else curses.A_BOLD
-    BG_ATTR = bg_attr()
+    ATTRS.hilite = curses.color_pair(9) if colors else curses.A_BOLD
+    ATTRS.bg = curses.color_pair(BG_PAIR) if colors else 0
 
 
 def cell_attr(kind: str) -> int:
     """Attr for a piece kind (cached by build_attrs after init_colors)."""
-    return CELL_ATTRS[kind]
-
-
-def bg_attr() -> int:
-    """Attr for the board/panel background fill (pair 12); 0 when the
-    terminal has no colors (the fill is plain background then — a no-op)."""
-    return curses.color_pair(BG_PAIR) if curses.has_colors() else 0
+    return ATTRS.cells[kind]
 
 
 # -- modal dialogs -----------------------------------------------------------
@@ -182,13 +193,13 @@ def draw_modal(stdscr: curses.window, modal: Modal, max_x: int, max_y: int) -> N
         stdscr.addstr(
             by, bx,
             "┌" + "─" * left + f" {modal.title} " + "─" * (gap - left) + "┐",
-            BORDER_ATTR,
+            ATTRS.border,
         )
         for i, line in enumerate(modal.lines):
             y = by + 1 + i
             is_cursor = modal.cursor is not None and i == modal.cursor
-            stdscr.addstr(y, bx, "│", BORDER_ATTR)
-            stdscr.addstr(y, bx + width - 1, "│", BORDER_ATTR)
+            stdscr.addstr(y, bx, "│", ATTRS.border)
+            stdscr.addstr(y, bx + width - 1, "│", ATTRS.border)
             # Opaque interior: blank every cell so the board/sidebar behind
             # the box cannot bleed through the padding.
             if is_cursor:
@@ -200,7 +211,7 @@ def draw_modal(stdscr: curses.window, modal: Modal, max_x: int, max_y: int) -> N
                     y, bx + 1 + (inner - len(line)) // 2, line,
                     curses.A_REVERSE if is_cursor else 0,
                 )
-        stdscr.addstr(by + height - 1, bx, "└" + "─" * inner + "┘", BORDER_ATTR)
+        stdscr.addstr(by + height - 1, bx, "└" + "─" * inner + "┘", ATTRS.border)
     except curses.error:
         pass
 
@@ -416,20 +427,38 @@ def draw_box(
     the highlight accent while a hold was just accepted).
     """
     border = f"┌{'─' * (w - 2)}┐"
-    border_attr = BORDER_ATTR if attr is None else attr
+    border_attr = ATTRS.border if attr is None else attr
     try:
         stdscr.addstr(by, bx, border, border_attr)
         stdscr.addstr(by + 1, bx, f"│ {title:<{w - 4}} │", border_attr)
         for i in range(h - 3):
-            # Borders keep BORDER_ATTR; the interior run gets the panel
+            # Borders keep the border attr; the interior run gets the panel
             # background (a no-op fill when colors are unavailable).
             stdscr.addstr(by + 2 + i, bx, "│", border_attr)
-            stdscr.addstr(by + 2 + i, bx + 1, " " * (w - 2), BG_ATTR)
+            stdscr.addstr(by + 2 + i, bx + 1, " " * (w - 2), ATTRS.bg)
             stdscr.addstr(by + 2 + i, bx + w - 1, "│", border_attr)
         stdscr.addstr(by + h - 1, bx, f"└{'─' * (w - 2)}┘", border_attr)
     except curses.error:
         pass
     return bx + 2, by + 2
+
+
+# Per-kind rotation-0 footprint, computed once (R5): the previews and the
+# spawn glide used to re-derive the bounding box on every call (6+ times
+# a frame).
+_FOOTPRINTS: dict[str, tuple[int, int, int, int]] = {}
+
+
+def _footprint(kind: str) -> tuple[int, int, int, int]:
+    """The rotation-0 bounding box (top, bottom, left, right), cached."""
+    fp = _FOOTPRINTS.get(kind)
+    if fp is None:
+        cells = PIECES[kind][0]
+        xs = [x for x, _ in cells]
+        ys = [y for _, y in cells]
+        fp = (min(ys), max(ys), min(xs), max(xs))
+        _FOOTPRINTS[kind] = fp
+    return fp
 
 
 def draw_piece_preview(
@@ -443,9 +472,7 @@ def draw_piece_preview(
     if kind not in PIECES:
         return
     cells = PIECES[kind][0]
-    xs = [x for x, _ in cells]
-    ys = [y for _, y in cells]
-    top, bottom, left, right = min(ys), max(ys), min(xs), max(xs)
+    top, bottom, left, right = _footprint(kind)
     width = (right - left + 1) * BOARD_PITCH
     # Box inner area is 12 cols wide, starting at ix - 1.
     ox = ix - 1 + (12 - width) // 2
@@ -489,13 +516,13 @@ def draw_board(
     # Solid border around the play area. The walls are outside the cell
     # area (1 col per side), so blocks never render on top of them.
     right = bx + BOARD_W_DRAWN - 1
-    top_attr = DANGER_ATTR | curses.A_BLINK if danger else BORDER_ATTR
+    top_attr = ATTRS.danger | curses.A_BLINK if danger else ATTRS.border
     try:
         stdscr.addstr(by, bx, BOARD_BAR, top_attr)
-        stdscr.addstr(by + BOARD_H + 1, bx, BOARD_BAR, BORDER_ATTR)
+        stdscr.addstr(by + BOARD_H + 1, bx, BOARD_BAR, ATTRS.border)
         for y in range(1, BOARD_H + 1):
-            stdscr.addstr(by + y, bx, "█", BORDER_ATTR)
-            stdscr.addstr(by + y, right, "█", BORDER_ATTR)
+            stdscr.addstr(by + y, bx, "█", ATTRS.border)
+            stdscr.addstr(by + y, right, "█", ATTRS.border)
     except curses.error:
         pass
 
@@ -504,7 +531,7 @@ def draw_board(
     # the ghost, and the flash rows are drawn on top of it.
     try:
         for y in range(BOARD_H):
-            stdscr.addstr(by + y + 1, bx + CELL_OFF, " " * BOARD_INNER_W, BG_ATTR)
+            stdscr.addstr(by + y + 1, bx + CELL_OFF, " " * BOARD_INNER_W, ATTRS.bg)
     except curses.error:
         pass
 
@@ -522,42 +549,36 @@ def draw_board(
 
     for y in range(BOARD_H):
         row = engine.board[y]
-        line_parts: list[tuple[str, int | None]] = []
+        x_cursor = bx + CELL_OFF
         for x in range(BOARD_W):
             kind = row[x]
             if (x, y) in live_cells:
                 if rotate_flash:
                     # P30: a successful rotation highlights the piece.
-                    line_parts.append(("██", HILITE_ATTR | curses.A_BOLD))
+                    text, attr = "██", ATTRS.hilite | curses.A_BOLD
                 elif pulse_dim:
                     # P23: the grounded piece pulses while the lock delay
                     # ticks — the "it's about to lock" cue.
-                    line_parts.append(("██", cell_attr(live_cells[(x, y)]) | curses.A_DIM))
+                    text, attr = "██", cell_attr(live_cells[(x, y)]) | curses.A_DIM
                 else:
-                    line_parts.append(("██", cell_attr(live_cells[(x, y)])))
+                    text, attr = "██", cell_attr(live_cells[(x, y)])
             elif kind:
                 if y in flash_rows:
-                    line_parts.append(("██", FLASH_ATTR))
+                    text, attr = "██", ATTRS.flash
                 elif lock_cells is not None and (x, y) in lock_cells:
                     # P22: the just-locked cells flash in the highlight accent.
-                    line_parts.append(("██", HILITE_ATTR | curses.A_BOLD))
+                    text, attr = "██", ATTRS.hilite | curses.A_BOLD
                 else:
-                    line_parts.append(("██", cell_attr(kind)))
+                    text, attr = "██", cell_attr(kind)
             elif (x, y) in ghost_cells:
-                line_parts.append(("▒▒", cell_attr(engine.piece.kind) | curses.A_DIM))
+                text, attr = "▒▒", cell_attr(engine.piece.kind) | curses.A_DIM
             else:
-                line_parts.append(("  ", None))
-
-        x_cursor = bx + CELL_OFF
-        for text, attr in line_parts:
-            if text != "  ":
-                try:
-                    if attr is None:
-                        stdscr.addstr(by + y + 1, x_cursor, text)
-                    else:
-                        stdscr.addstr(by + y + 1, x_cursor, text, attr)
-                except curses.error:
-                    pass
+                x_cursor += BOARD_PITCH  # empty cell: advance, draw nothing
+                continue
+            try:
+                stdscr.addstr(by + y + 1, x_cursor, text, attr)
+            except curses.error:
+                pass
             x_cursor += BOARD_PITCH  # solid blocks, no gap
 
         if y in flash_rows:
@@ -598,12 +619,12 @@ def _draw_spawn_glide(
     # "from": the NEXT box's head preview (see draw_piece_preview /
     # draw_sidebar): inner origin (bx + BOARD_W_DRAWN + 4 + 2, by + 9),
     # preview centered in the 12-col inner area on its rotation-0 footprint.
-    base = PIECES[kind][0]
-    width_px = (max(x for x, _ in base) - min(x for x, _ in base) + 1) * BOARD_PITCH
+    top, _, left, right = _footprint(kind)
+    width_px = (right - left + 1) * BOARD_PITCH
     next_x = bx + BOARD_W_DRAWN + 4 + 2
     next_y = by + 9
     from_x = next_x - 1 + (12 - width_px) // 2
-    from_y = next_y + min(y for _, y in base)
+    from_y = next_y + top
 
     px = round(from_x + (to_x - from_x) * frac)
     py = round(from_y + (to_y - from_y) * frac)
@@ -621,19 +642,25 @@ def draw_stats_panel(stdscr: curses.window, engine: Tetris, by: int, x: int, new
     "★ NEW BEST ★" indicator two rows below the last stat row. The key
     legend and version live in the help modal (`?`) instead."""
     for i, (label, value) in enumerate(panel_stats(engine.snapshot(), sprint=engine.sprint)):
-        value_attr = STAT_ATTR
-        # Sprint (P11): blink the countdown once 30 s or less remain...
-        if engine.sprint and label == "TIME" and engine.time_left is not None and engine.time_left <= 30:
-            value_attr = STAT_ATTR | curses.A_BLINK
-        # ...and turn it red in the danger color for the final 10 s (P28).
-        if engine.sprint and label == "TIME" and engine.time_left is not None and engine.time_left <= 10:
-            value_attr = DANGER_ATTR | curses.A_BLINK
+        value_attr = ATTRS.stat
+        # Sprint (P11/P28): blink the countdown once 30 s or less remain,
+        # in the danger color for the final 10 s.
+        if (
+            engine.sprint
+            and label == "TIME"
+            and engine.time_left is not None
+            and engine.time_left <= 30
+        ):
+            if engine.time_left <= 10:  # danger: the final 10 s
+                value_attr = ATTRS.danger | curses.A_BLINK
+            else:  # warning blink: 30 s or less
+                value_attr = ATTRS.stat | curses.A_BLINK
         # P25: an active back-to-back streak glows in the highlight color.
         if label == "B2B" and engine.b2b:
-            value_attr = HILITE_ATTR
+            value_attr = ATTRS.hilite
         try:
             stdscr.addstr(
-                by + 2 + i, x, f"{label:<7}", STAT_ATTR | curses.A_DIM
+                by + 2 + i, x, f"{label:<7}", ATTRS.stat | curses.A_DIM
             )
             stdscr.addstr(by + 2 + i, x + 7, value, value_attr)
         except curses.error:
@@ -659,7 +686,7 @@ def draw_sidebar(
     ``hold_flash`` (P29): draw the HOLD box border and its preview in the
     highlight accent while a hold was just accepted.
     """
-    flash_attr = HILITE_ATTR if hold_flash else None
+    flash_attr = ATTRS.hilite if hold_flash else None
     hold_x, hold_y = draw_box(stdscr, "HOLD", sx, by, HOLD_W, 6, attr=flash_attr)
     if state.settings.hold:
         draw_piece_preview(
@@ -683,27 +710,26 @@ def draw_sidebar(
 
 
 __all__ = [
+    "ATTRS",
     "BG_PAIR",
     "BOARD_BAR",
     "BOARD_INNER_W",
     "BOARD_PITCH",
     "BOARD_WALL",
     "BOARD_W_DRAWN",
-    "BORDER_ATTR",
     "BORDER_PAIR",
     "CELL_OFF",
     "COLORS",
-    "DANGER_ATTR",
     "DANGER_PAIR",
-    "HILITE_ATTR",
     "HOLD_W",
     "NEED_H",
     "NEED_W",
     "PANEL_GAP",
     "STATS_W",
+    "AttrCache",
     "Modal",
     "_draw_spawn_glide",
-    "bg_attr",
+    "_footprint",
     "build_attrs",
     "build_game_over_modal",
     "build_help_modal",

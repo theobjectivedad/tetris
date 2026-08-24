@@ -26,8 +26,8 @@ from .engine import Event, Tetris
 from .pieces import BOARD_H, BOARD_W, PIECES
 from .ui_input import ARR, DAS, KeyReader
 from .ui_render import (
+    ATTRS,
     BG_PAIR,
-    BORDER_ATTR,
     NEED_H,
     NEED_W,
     Modal,
@@ -84,10 +84,10 @@ if __name__ == "__main__":
 
 __all__ = [
     "ARR",
+    "ATTRS",
     "BG_PAIR",
     "BOARD_H",
     "BOARD_W",
-    "BORDER_ATTR",
     "DAS",
     "FRAME",
     "NEED_H",

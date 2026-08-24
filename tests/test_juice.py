@@ -155,7 +155,7 @@ def test_pulse_draws_dim_half_frames(monkeypatch, tmp_path) -> None:
 
 def test_danger_bar_blinks_when_stack_reaches_top(monkeypatch, tmp_path) -> None:
     """With the stack within DANGER_TOP_ROWS of the ceiling the board's top
-    border carries A_BLINK (DANGER_ATTR's monochrome fallback; white on
+    border carries A_BLINK (ATTRS.danger's monochrome fallback; white on
     red on a color terminal)."""
     s = _session(monkeypatch, tmp_path)
     for x in range(BOARD_W):
@@ -403,7 +403,7 @@ def test_sprint_timer_turns_danger_in_final_ten(monkeypatch, tmp_path) -> None:
     remain (on top of the 30-s-or-less blink), plain above that."""
     import tetris.ui_render as ur
 
-    monkeypatch.setattr(ur, "DANGER_ATTR", 0x4000)  # a visible sentinel
+    monkeypatch.setattr(ur.ATTRS, "danger", 0x4000)  # a visible sentinel
     s = _session_sprint(monkeypatch, tmp_path)
     scr = FakeScreen()
     s.engine.time_left = 9.5
