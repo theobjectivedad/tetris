@@ -1,8 +1,8 @@
 # Terminal Tetris
 
 A feature-rich Tetris that runs right in your terminal, built with
-Python's `curses`. No runtime dependencies, no browser, no GPU — just
-`just run` and a 60×27 terminal.
+Python's `curses`. No runtime dependencies, no browser, no GPU — all
+you need is `just run` and a 60×27 terminal.
 
 > **An AI-built demo.**
 > Every line of this game — code, tests, and docs — was written
