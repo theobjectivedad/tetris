@@ -706,3 +706,75 @@ README/plan sync).
 
 ### Progress log
 
+- [x] **R1** Replay extraction: the 8 scattered replay fields +
+      start/step/finish/speed-cycling moved into a `ReplayController`
+      (Session keeps thin compatibility properties for the test API;
+      the session-side animation state stays at the call sites). —
+      merged 4afb304
+- [x] **R2** Game-lifecycle state object: `GameRun` dataclass (seed,
+      score-record rank/new-best, sprint bookkeeping, replay log flag)
+      with a `GameRun.fresh(now, state)` classmethod; `__init__` and
+      `reset_game` now share one construction path (the duplicated
+      ~15-line reset block is gone). — merged cd3b248
+- [x] **R3** Dispatch/effects decomposition: `_dispatch_key` (180-line
+      five-context if/elif) is a thin dispatch over `_handle_name_entry`
+      / `_handle_settings_menu` / `_handle_replays_menu` /
+      `_handle_play_input`; `_apply_effects` splits into
+      `_consume_events` + `_score_moments`. The P25 combo/B2B floaters
+      no longer re-derive scoring rules from live engine state — the
+      engine stamps post-commit `combo`/`b2b` onto each `Event`
+      (additive fields, append-only) and the floaters read the event
+      snapshot. — merged 3f65315
+- [x] **R4** State hardening: the per-frame `replays()` display path is
+      served from a display cache invalidated by `save_replay` (explicit
+      invalidation, no mtime heuristics — identical behavior on
+      coarse-timestamp filesystems); `last_replay()`/`save_replay()`
+      stay fresh reads so external file changes (a corrupt log) are
+      still seen; `save()` and `save_replay()` write atomically (tmp +
+      `os.replace`); the 7+ `isinstance(int)-not-bool` sites now
+      funnel through `state.as_int`/`as_number` (which also stop
+      accepting bools as corrupt seed/level data). — merged 0a43c4e
+- [x] **R5** Render-layer cleanup: `AttrCache` dataclass + the module
+      `ATTRS` singleton replace the 7 rebinding attr globals — no
+      `global` statements remain in `ui_render`, and the stale-
+      `main.BORDER_ATTR` re-export bug class is eliminated (`main.ATTRS`
+      is the same object). `init_colors`' pair-10 special case is a
+      plain fixed pair; the sprint-TIME double-if is one nested if;
+      per-kind preview footprints are cached once (`_footprint`);
+      `draw_board` drops the `line_parts` intermediate. Test seams
+      move to `ATTRS.danger` / `ATTRS.border`. — merged cdc4759
+- [x] **R6** Engine & input micro-cleanup: `hard_drop` computes its
+      landing via `ghost_y()` (same scoring/lock, no per-step Piece
+      allocation); `Piece.cells()` delegates to `cells_at_rot`;
+      `TSPIN_FRONT` hoisted to a module constant; `KeyReader.reset()`
+      clears the stale rotate cooldown (documented behavior change +
+      test). — merged 986ee51
+- [x] **R7** Packaging/CI hygiene: `[dependency-groups] dev` is the
+      single dev-dep source (pytest, ruff, mypy, pre-commit); the stale
+      `[project.optional-dependencies] dev` is deleted (transient
+      pytest-cov/pytest-watch stay `--with`); CI `uv sync --extra dev`
+      → `uv sync` (verified to mirror `just check` + `just test` from
+      the synced env); the stale `test_ui_polish.py` header rewritten —
+      the features shipped; the file is the standing acceptance spec. —
+      merged aa74b8e
+- [x] **R8** Contract slimming: `main.__all__` shrinks from 30
+      re-exports to the 9-name hard contract (the 7 monkeypatch names
+      + `FRAME`/`main`); tests import the modal builders from
+      `tetris.ui_render` and `KeyReader`/`ARR`/`DAS` from
+      `tetris.ui_input`; `grep -r 'main\.' tests/` shows only contract
+      names; AGENTS.md hard-contract bullets updated (the 7-name main
+      contract, the `ui_render.ATTRS` patch seam, `Event`'s append-only
+      additive fields). — merged 0ae34e8
+- [x] **R9** Final sync: README re-verified (test count 326/307
+      functions, `ui_session` layout description, controls/features vs
+      shipped code — zero drift); perf re-measured at 0.081 s / 200
+      random games (0.40 ms/game — inside the 0.12 s 2026-07-21
+      baseline, faster thanks to the R6 `hard_drop` simplification);
+      full gate green (`just check` + 326 tests); full MCP smoke per
+      policy (start → stats → key spread incl. x/g/f/l → screen → stop,
+      no traceback). — this commit
+
+**All 9 Phase 4 items (R1–R9) are complete.** Final state: 326 pytest
+tests passing, `just check` (ruff + mypy --strict) green, working tree
+clean. The burn-down is closed.
+

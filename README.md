@@ -124,11 +124,12 @@ Or directly: `uv run python -m tetris.main`
 - `src/tetris/ui_input.py` — key reading, ESC-sequence reassembly, DAS/ARR
   timing
 - `src/tetris/ui_render.py` — colors, modal builders, board/sidebar drawing
-- `src/tetris/ui_session.py` — the per-game state machine (session + effects)
+- `src/tetris/ui_session.py` — the per-game state machine (Session, Effects,
+  the replay controller, and the per-game run state)
 - `src/tetris/main.py` — curses entry point + 50 fps frame loop
 - `src/tetris/mcp/` — MCP play-test server (pty + pyte mirror, run with
   `just mcp` — see `src/tetris/mcp/README.md`)
-- `tests/` — 323 pytest tests (308 test functions; some parametrized)
+- `tests/` — 326 pytest tests (307 test functions; some parametrized)
 
 ## Roadmap
 
