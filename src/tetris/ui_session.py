@@ -134,6 +134,192 @@ class Effects:
         return (0, 0)
 
 
+class ReplayController:
+    """Re-run a saved replay (P9, with P18's speed and P19's index).
+
+    Owns the playback state: the saved payload, the replay engine, the
+    virtual-time accumulator (P18 — an accumulator rather than
+    ``(now - start) * speed``, so a mid-replay speed change never jumps
+    the timeline), the replay speed, and the event cursor. While a
+    replay runs, the session's live engine is swapped for the replay
+    engine, so the normal step/render paths see it; when the replay
+    ends (completed or aborted) the original game-over engine is
+    restored and the session's input timing returns to the user's
+    settings.
+
+    The live game's input log (``replay_events``) is not playback state
+    — it belongs to the game's lifecycle and is saved at game over.
+    """
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+        self.payload: dict[str, object] | None = None
+        self.engine: Tetris | None = None
+        self.original: Tetris | None = None
+        self.vt = 0.0       # virtual replay time (advances at speed)
+        self.speed = 1.0    # 1x / 2x / 4x (F during replay)
+        self._last_t = 0.0  # wall-clock time of the last replay step
+        self.next = 0       # next logged event index
+        self._stop_seq = 0
+
+    @property
+    def active(self) -> bool:
+        """True while a replay is running (the replay engine is in)."""
+        return self.engine is not None
+
+    def reset(self) -> None:
+        """Clear all playback state (a new game starts)."""
+        self.payload = None
+        self.engine = None
+        self.original = None
+        self.vt = 0.0
+        self.speed = 1.0
+        self._last_t = 0.0
+        self.next = 0
+        self._stop_seq = 0
+
+    def start(self, now: float, index: int = 0) -> bool:
+        """Start a saved replay; the replay engine swaps in for the
+        session's engine so the normal draw path renders the replay.
+
+        A fresh engine gets the original seed/start level; the logged
+        events are re-fed at their original game-relative timestamps
+        (scaled by the replay speed). ``index`` selects from the saved
+        replays, newest first (0 = the most recent, i.e. what G always
+        plays). Returns False (no-op) when the index is out of range or
+        the saved seed/start level are malformed.
+        """
+        session = self._session
+        replays = session.state.replays()
+        if not 0 <= index < len(replays):
+            return False
+        data = replays[index]
+        raw_seed = data.get("seed")
+        raw_level = data.get("start_level")
+        if not isinstance(raw_seed, int) or not isinstance(raw_level, int):
+            return False
+        self.payload = data
+        self.original = session.engine
+        self.engine = session.tetris_cls(
+            rng=random.Random(raw_seed),
+            start_level=raw_level,
+            sprint=bool(data.get("sprint", False)),
+        )
+        session.engine = self.engine
+        self.vt = 0.0
+        self._last_t = now
+        self.speed = 1.0
+        self.next = 0
+        self._stop_seq = 0
+        # The replay must use the original game's input timing, and must
+        # not inherit a held key or a rotate cooldown from the live game.
+        raw_das = data.get("das")
+        raw_arr = data.get("arr")
+        if isinstance(raw_das, (int, float)) and not isinstance(raw_das, bool):
+            session.reader.das = float(raw_das)
+        if isinstance(raw_arr, (int, float)) and not isinstance(raw_arr, bool):
+            session.reader.arr = float(raw_arr)
+        session.reader.reset()
+        session.effects.clear()
+        return True
+
+    def cycle_speed(self) -> None:
+        """Cycle the replay speed 1x -> 2x -> 4x -> 1x (P18, the F key)."""
+        self.speed = (
+            2.0 if self.speed == 1.0
+            else 4.0 if self.speed == 2.0
+            else 1.0
+        )
+
+    def step(self, now: float) -> bool:
+        """One frame of the replay: feed every logged event whose
+        game-relative time has elapsed, then tick the engine.
+
+        Returns True when the run finished on this frame (the original
+        engine is already restored by the time the caller sees it).
+        """
+        engine = self.engine
+        if engine is None:
+            return False
+        events = self.payload.get("events") if self.payload is not None else None
+        if not isinstance(events, list):
+            self.finish()
+            return True
+        # P18: advance virtual time at the current speed. An accumulator
+        # (rather than (now - start) * speed) so a mid-replay speed change
+        # never jumps the timeline.
+        self.vt += (now - self._last_t) * self.speed
+        self._last_t = now
+        elapsed = self.vt
+        while self.next < len(events):
+            ev = events[self.next]
+            if (
+                not isinstance(ev, list)
+                or len(ev) != 2
+                or not isinstance(ev[0], (int, float))
+                or isinstance(ev[0], bool)
+                or not isinstance(ev[1], str)
+            ):
+                self.next += 1  # skip a malformed entry
+                continue
+            if ev[0] > elapsed:
+                break
+            self.next += 1
+            self._apply_token(engine, ev[1], float(ev[0]))
+        engine.tick(elapsed)
+        if engine.frozen:
+            engine.advance_flash()
+        # Finish: the run ended in game over, or all events are fed and
+        # the piece produced by the last input has locked (a new piece —
+        # the final board — has spawned).
+        if self.next >= len(events):
+            if self._stop_seq == 0:
+                self._stop_seq = engine.spawn_seq
+            if engine.game_over or engine.spawn_seq > self._stop_seq:
+                self.finish()
+                return True
+        return False
+
+    def finish(self) -> None:
+        """End the replay (completed or aborted): restore the original
+        game-over engine and the user's input timing (P9)."""
+        session = self._session
+        if self.original is not None:
+            session.engine = self.original
+        self.payload = None
+        self.engine = None
+        self.original = None
+        self.next = 0
+        self._stop_seq = 0
+        self.speed = 1.0
+        session.reader.das = session.state.settings.das
+        session.reader.arr = session.state.settings.arr
+        session.reader.reset()
+        session.effects.clear()
+
+    @staticmethod
+    def _apply_token(engine: Tetris, token: str, at: float) -> None:
+        """Re-run one logged action on the replay engine at its original
+        game-relative time (P9). Unknown tokens (e.g. ones logged by a
+        newer build) are skipped."""
+        if token == "L":
+            engine.move(-1, at)
+        elif token == "R":
+            engine.move(1, at)
+        elif token == "U":
+            engine.rotate(1, at)
+        elif token == "Z":
+            engine.rotate(-1, at)
+        elif token == "S":
+            engine.soft_drop()
+        elif token == "H":
+            engine.hard_drop()
+        elif token == "C":
+            engine.hold()
+        elif token == "X":
+            engine.rotate_180(at)
+
+
 class Session:
     """One play session: the state machine that used to be ``game_loop``.
 
@@ -157,19 +343,12 @@ class Session:
         # Replay (P9): the engine is fully deterministic given (seed, actions,
         # times), so each game gets a seed, and every accepted player action
         # is logged with its game-relative time. G at game over re-plays the
-        # last saved replay at 1× speed.
+        # last saved replay at 1× speed. Playback state lives in
+        # ReplayController; the log below belongs to this game's lifecycle.
         self.seed = int(now * 1000) % 2**32
         self.game_start = now
         self.replay_events: list[tuple[float, str]] = []
         self.replay_saved = False
-        self.replay: dict[str, object] | None = None
-        self.replay_engine: Tetris | None = None
-        self.replay_original: Tetris | None = None
-        self.replay_vt = 0.0      # virtual replay time (advances at replay_speed)
-        self.replay_last_t = 0.0  # wall-clock time of the last replay step
-        self.replay_speed = 1.0   # P18: 1x / 2x / 4x (F during replay)
-        self.replay_next = 0
-        self.replay_stop_seq = 0
 
         self.engine = self.tetris_cls(
             rng=random.Random(self.seed),
@@ -193,6 +372,7 @@ class Session:
         self.sprint_best: float | None = None
         self.reader = KeyReader()
         self.effects = Effects()
+        self._replay = ReplayController(self)
         self.menu: str | None = None  # None | "help" | "settings" | "scores"
         self.menu_cursor = 0
         self.name_awaiting = False  # game over: high-score name still being typed
@@ -216,14 +396,7 @@ class Session:
         self.game_start = self.now
         self.replay_events.clear()
         self.replay_saved = False
-        self.replay = None
-        self.replay_engine = None
-        self.replay_original = None
-        self.replay_vt = 0.0
-        self.replay_last_t = 0.0
-        self.replay_speed = 1.0
-        self.replay_next = 0
-        self.replay_stop_seq = 0
+        self._replay.reset()
         self.engine = self.tetris_cls(
             rng=random.Random(self.seed),
             start_level=self.state.settings.start_level,
@@ -274,69 +447,63 @@ class Session:
         still reject a move, which replays identically."""
         self.replay_events.append((self.now - self.game_start, token))
 
-    def apply_replay_token(self, engine: Tetris, token: str, at: float) -> None:
-        """Re-run one logged action on the replay engine at its original
-        game-relative time (P9)."""
-        if token == "L":
-            engine.move(-1, at)
-        elif token == "R":
-            engine.move(1, at)
-        elif token == "U":
-            engine.rotate(1, at)
-        elif token == "Z":
-            engine.rotate(-1, at)
-        elif token == "S":
-            engine.soft_drop()
-        elif token == "H":
-            engine.hard_drop()
-        elif token == "C":
-            engine.hold()
-        elif token == "X":
-            engine.rotate_180(at)
-        # Unknown tokens (e.g. ones logged by a newer build) are skipped.
+    # -- replay (P9) ----------------------------------------------------
+    #
+    # The playback state (saved payload, replay engine, virtual time,
+    # speed, event cursor) lives in ReplayController. The thin
+    # properties and wrappers below keep Session's historical surface
+    # (replay_step/start_replay/finish_replay, the replay_* fields) and
+    # own the session-side effects of a replay transition: the spawn
+    # glide re-arm and the forced redraw.
+
+    @property
+    def replay_engine(self) -> Tetris | None:
+        """The replay engine while a replay is running, else None."""
+        return self._replay.engine
+
+    @replay_engine.setter
+    def replay_engine(self, engine: Tetris | None) -> None:
+        self._replay.engine = engine
+
+    @property
+    def replay_original(self) -> Tetris | None:
+        """The live engine displaced by a running replay (restored on
+        finish)."""
+        return self._replay.original
+
+    @replay_original.setter
+    def replay_original(self, engine: Tetris | None) -> None:
+        self._replay.original = engine
+
+    @property
+    def replay_speed(self) -> float:
+        """The replay speed multiplier (1x / 2x / 4x, P18)."""
+        return self._replay.speed
+
+    @replay_speed.setter
+    def replay_speed(self, speed: float) -> None:
+        self._replay.speed = speed
+
+    @property
+    def replay_vt(self) -> float:
+        """The replay's virtual time (P18), in game-relative seconds."""
+        return self._replay.vt
+
+    @property
+    def replay_next(self) -> int:
+        """The replay's next logged-event index."""
+        return self._replay.next
 
     def start_replay(self, now: float, index: int = 0) -> None:
         """G at game over: re-run a saved replay (P9; P19 adds the index).
 
-        A fresh engine gets the original seed/start level; the logged
-        events are re-fed at their original game-relative timestamps
-        (scaled by the replay speed, P18). ``engine`` is swapped to the
-        replay engine so the normal draw path renders the replay; the
-        original game-over engine is restored when the replay ends or is
-        aborted (ESC). ``index`` selects from the saved replays, newest
-        first (0 = the most recent, i.e. what G always played).
+        The controller swaps the replay engine in for the session's
+        engine and restores the original game's input timing; this
+        wrapper re-arms the session's animation state (a forced redraw,
+        and the replay's first piece glides in like a fresh game's).
         """
-        replays = self.state.replays()
-        if not 0 <= index < len(replays):
+        if not self._replay.start(now, index):
             return
-        data = replays[index]
-        raw_seed = data.get("seed")
-        raw_level = data.get("start_level")
-        if not isinstance(raw_seed, int) or not isinstance(raw_level, int):
-            return
-        self.replay = data
-        self.replay_original = self.engine
-        self.replay_engine = self.tetris_cls(
-            rng=random.Random(raw_seed),
-            start_level=raw_level,
-            sprint=bool(data.get("sprint", False)),
-        )
-        self.engine = self.replay_engine
-        self.replay_vt = 0.0
-        self.replay_last_t = now
-        self.replay_speed = 1.0
-        self.replay_next = 0
-        self.replay_stop_seq = 0
-        # The replay must use the original game's input timing, and must
-        # not inherit a held key or a rotate cooldown from the live game.
-        raw_das = data.get("das")
-        raw_arr = data.get("arr")
-        if isinstance(raw_das, (int, float)) and not isinstance(raw_das, bool):
-            self.reader.das = float(raw_das)
-        if isinstance(raw_arr, (int, float)) and not isinstance(raw_arr, bool):
-            self.reader.arr = float(raw_arr)
-        self.reader.reset()
-        self.effects.clear()
         self.anim_start = None
         self.last_seq = 0  # the replay's first piece glides in too
         self.prev_scene = None  # force a full redraw onto the replay board
@@ -344,62 +511,17 @@ class Session:
     def finish_replay(self) -> None:
         """End a replay (completed or aborted) and restore the original
         game-over screen (P9)."""
-        if self.replay_original is not None:
-            self.engine = self.replay_original
-        self.replay = None
-        self.replay_engine = None
-        self.replay_original = None
-        self.replay_next = 0
-        self.replay_stop_seq = 0
-        self.replay_speed = 1.0
-        self.reader.das = self.state.settings.das
-        self.reader.arr = self.state.settings.arr
-        self.reader.reset()
-        self.effects.clear()
+        self._replay.finish()
         self.anim_start = None
         self.last_seq = self.engine.spawn_seq  # no glide: the final piece is already placed
         self.prev_scene = None  # force a redraw of the original game-over screen
 
     def replay_step(self, now: float) -> None:
-        """One frame of the replay: feed every logged event whose
-        game-relative time has elapsed, tick the engine, and finish when
-        the run is done (P9)."""
-        events = self.replay.get("events") if self.replay is not None else None
-        if not isinstance(events, list) or self.replay_engine is None:
+        """One frame of the replay (P9): feed the elapsed logged events,
+        tick the engine, and — when the run ends — restore the original
+        game-over engine and re-arm the animation state."""
+        if self._replay.step(now):
             self.finish_replay()
-            return
-        # P18: advance virtual time at the current speed. An accumulator
-        # (rather than (now - start) * speed) so a mid-replay speed change
-        # never jumps the timeline.
-        self.replay_vt += (now - self.replay_last_t) * self.replay_speed
-        self.replay_last_t = now
-        elapsed = self.replay_vt
-        while self.replay_next < len(events):
-            ev = events[self.replay_next]
-            if (
-                not isinstance(ev, list)
-                or len(ev) != 2
-                or not isinstance(ev[0], (int, float))
-                or isinstance(ev[0], bool)
-                or not isinstance(ev[1], str)
-            ):
-                self.replay_next += 1  # skip a malformed entry
-                continue
-            if ev[0] > elapsed:
-                break
-            self.replay_next += 1
-            self.apply_replay_token(self.replay_engine, ev[1], float(ev[0]))
-        self.replay_engine.tick(elapsed)
-        if self.replay_engine.frozen:
-            self.replay_engine.advance_flash()
-        # Finish: the run ended in game over, or all events are fed and
-        # the piece produced by the last input has locked (a new piece —
-        # the final board — has spawned).
-        if self.replay_next >= len(events):
-            if self.replay_stop_seq == 0:
-                self.replay_stop_seq = self.replay_engine.spawn_seq
-            if self.replay_engine.game_over or self.replay_engine.spawn_seq > self.replay_stop_seq:
-                self.finish_replay()
 
     def on_frame(self, stdscr: curses.window, now: float) -> bool:
         """Advance one frame; True when the player has quit.
@@ -441,16 +563,11 @@ class Session:
         consumed so no live-game input can leak into the replayed run.
         """
         key = self.reader.next_key(stdscr, now)
-        if self.replay_engine is not None:
+        if self._replay.active:
             if key in (27, KEY_ESCAPE):
                 self.finish_replay()
             elif key in (ord("f"), ord("F")):
-                # P18: 1x -> 2x -> 4x -> 1x.
-                self.replay_speed = (
-                    2.0 if self.replay_speed == 1.0
-                    else 4.0 if self.replay_speed == 2.0
-                    else 1.0
-                )
+                self._replay.cycle_speed()
             key = -1
         return key
 
@@ -610,7 +727,7 @@ class Session:
 
     def _step_engine(self, now: float) -> None:
         """Gravity + lock delay — or one replay step while re-running."""
-        if self.replay_engine is not None:
+        if self._replay.active:
             self.replay_step(now)
             return
         self.engine.tick(now)
@@ -649,7 +766,7 @@ class Session:
         # live game's state is frozen, so the flip detector stands down
         # and was_over keeps its value). A sprint win gets the brisk,
         # rising pattern; a loss or top-out the slow, descending one.
-        if self.replay_engine is None:
+        if not self._replay.active:
             if self.engine.game_over and not self.was_over:
                 self.effects.pattern(
                     now, (0.0, 0.1, 0.2) if self.engine.won else (0.0, 0.18, 0.42)
@@ -868,7 +985,7 @@ class Session:
             int(self.engine.time_left)
             if self.engine.sprint and self.engine.time_left is not None
             else None,
-            self.replay_speed,  # P18: a speed change must redraw the tag
+            self._replay.speed,  # P18: a speed change must redraw the tag
             self.state.best() if self.engine.game_over else 0,
         )
 
@@ -966,9 +1083,11 @@ class Session:
 
         # Replay tag (P9): shown while the input log is being re-run;
         # carries the speed while it is not 1x (P18).
-        if self.replay_engine is not None:
-            tag = "REPLAY" if self.replay_speed == 1.0 else (
-                f"REPLAY {self.replay_speed:.0f}x"
+        if self._replay.active:
+            tag = (
+                "REPLAY"
+                if self._replay.speed == 1.0
+                else f"REPLAY {self._replay.speed:.0f}x"
             )
             try:
                 stdscr.addstr(by + BOARD_H + 3, bx, tag, curses.A_DIM)
@@ -1013,4 +1132,4 @@ class Session:
             draw_modal(stdscr, build_pause_modal(), max_x, max_y)
 
 
-__all__ = ["SPAWN_ANIM_SECONDS", "Effects", "Session"]
+__all__ = ["SPAWN_ANIM_SECONDS", "Effects", "ReplayController", "Session"]
