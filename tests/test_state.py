@@ -132,6 +132,38 @@ def test_replay_save_and_last(tmp_path: Path) -> None:
     assert gs.last_replay() is None
 
 
+def test_replays_accessor_is_cached_until_next_save(monkeypatch, tmp_path: Path) -> None:
+    """R4: replays() — the per-frame display path — serves the parsed log
+    from memory while it is unchanged by us; a save_replay invalidates
+    the cache so the next display re-reads the file."""
+    path = tmp_path / "state.json"
+    gs = GameState(path)
+    gs.save_replay({"seed": 1, "start_level": 1, "events": []})
+
+    real = GameState._read_replays_file
+    reads = 0
+
+    def counting(self: GameState) -> list[dict[str, object]]:
+        nonlocal reads
+        reads += 1
+        return real(self)
+
+    monkeypatch.setattr(GameState, "_read_replays_file", counting)
+
+    reads = 0
+    first = gs.replays()
+    second = gs.replays()
+    third = gs.replays()
+    assert reads == 1  # one read, then served from the cache
+    assert first == second == third
+
+    gs.save_replay({"seed": 2, "start_level": 1, "events": []})
+    reads = 0
+    fresh = gs.replays()
+    assert reads == 1  # the save invalidated the cache; re-read
+    assert [e["seed"] for e in fresh] == [2, 1]  # newest first
+
+
 def test_record_stores_name(tmp_path: Path) -> None:
     path = tmp_path / "state.json"
     gs = GameState(path)

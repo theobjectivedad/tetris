@@ -30,6 +30,43 @@ def _sanitize_name(raw: object) -> str:
     return str(raw).strip()[:MAX_NAME]
 
 
+def as_int(value: object, default: int = 0) -> int:
+    """Tolerant int coercion: a real int (bools are not ints here), else
+    ``default``. Shared by every tolerant JSON read (R4)."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return default
+
+
+def as_number(value: object) -> float | None:
+    """Tolerant number coercion: a real int/float (no bools) as float,
+    else None. Shared by every tolerant JSON read (R4)."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return None
+
+
+def _write_json_atomic(path: Path, data: object) -> None:
+    """Serialize ``data`` and write it to ``path`` atomically (tmp file
+    + ``os.replace``), so a crash mid-write can never leave a truncated
+    or corrupt file. Any failure is swallowed — state saving must never
+    crash the game."""
+    try:
+        text = json.dumps(data, indent=2)
+    except (TypeError, ValueError):
+        return
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(text)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
 def default_state_path() -> Path:
     """Where the unified state file lives (``TETRIS_SCORES`` override kept
     for back-compat with the old score-file location)."""
@@ -52,10 +89,7 @@ def _coerce_entries(raw: object) -> list[dict[str, object]]:
 
 def _entry_score(entry: dict[str, object]) -> int:
     """Sort key: the entry's score, or 0 if missing/malformed."""
-    value = entry.get("score")
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
-    return 0
+    return as_int(entry.get("score"))
 
 
 class GameState:
@@ -71,6 +105,14 @@ class GameState:
         self.entries: list[dict[str, object]] = []
         self.settings = Settings()
         self.sprint: dict[str, object] = {}  # {"best_time": float, "date": str}
+        # Replay display cache (R4): replays() is the per-frame path (the
+        # replay list dialog rebuilds its rows on every dirty frame, and
+        # the log can grow large — every accepted input of up to 5
+        # games). It is served from memory while the file is unchanged by
+        # us; save_replay invalidates it. last_replay() and save_replay
+        # always read the file fresh: they are one-shot correctness
+        # paths (and must see external file changes, e.g. a corrupt log).
+        self._replays: list[dict[str, object]] | None = None
         self._load(load_legacy)
 
     def _load(self, load_legacy: bool) -> None:
@@ -101,19 +143,13 @@ class GameState:
         """Top score, or 0 for an empty board."""
         if not self.entries:
             return 0
-        score = self.entries[0].get("score")
-        if isinstance(score, int) and not isinstance(score, bool):
-            return score
-        return 0
+        return as_int(self.entries[0].get("score"))
 
     # -- sprint best (P11) ---------------------------------------------
 
     def best_sprint_time(self) -> float | None:
         """The best (lowest) sprint clear time in seconds, or None."""
-        value = self.sprint.get("best_time")
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            return float(value)
-        return None
+        return as_number(self.sprint.get("best_time"))
 
     def record_sprint(self, time_s: float) -> tuple[bool, float | None]:
         """Record a sprint clear time (P11); lower is better.
@@ -204,22 +240,20 @@ class GameState:
         self.save()
 
     def save(self) -> None:
-        """Write the unified file; a save failure must never crash the game."""
+        """Write the unified file atomically; a save failure must never
+        crash the game."""
         payload = {
             "scores": self.entries,
             "settings": asdict(self.settings),
             "sprint": self.sprint,
         }
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(json.dumps(payload, indent=2))
-        except OSError:
-            pass  # never let state saving crash the game
+        _write_json_atomic(self.path, payload)
 
     # -- replays ---------------------------------------------------------
 
-    def _load_replays(self) -> list[dict[str, object]]:
-        """Replays from the replay log; tolerant of missing/corrupt files."""
+    def _read_replays_file(self) -> list[dict[str, object]]:
+        """Read the replay log from disk (tolerant of a missing, corrupt,
+        or non-list log)."""
         path = self.path.parent / REPLAYS_FILE
         if not path.exists():
             return []
@@ -231,32 +265,34 @@ class GameState:
             return []
         return [e for e in data if isinstance(e, dict)][-MAX_REPLAYS:]
 
-    def save_replay(self, replay: dict[str, object]) -> None:
-        """Append a finished game's replay (seed + timestamped input log)
-        to the replay log, keeping the ``MAX_REPLAYS`` most recent.
-        Failures are swallowed — replays are a convenience, not state."""
-        replays = self._load_replays()
-        replays.append(replay)
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            (self.path.parent / REPLAYS_FILE).write_text(
-                json.dumps(replays[-MAX_REPLAYS:], indent=2)
-            )
-        except (OSError, TypeError, ValueError):
-            pass
-
-    def last_replay(self) -> dict[str, object] | None:
-        """The most recently saved replay, or None if the log is empty."""
-        replays = self._load_replays()
-        return replays[-1] if replays else None
-
     def replays(self) -> list[dict[str, object]]:
         """The saved replays, most recent first (up to MAX_REPLAYS).
 
         The replay list dialog (P19) shows this order: the newest run is
         row 1. Replays older than the MAX_REPLAYS window are gone.
+        Served from the display cache while the log is unchanged by us
+        (R4); a save_replay invalidates it. A fresh copy is returned
+        each call, so callers may not see (or break) the cache.
         """
-        return list(reversed(self._load_replays()))
+        if self._replays is None:
+            self._replays = self._read_replays_file()
+        return list(reversed(self._replays))
+
+    def last_replay(self) -> dict[str, object] | None:
+        """The most recent saved replay (fresh read — one-shot path)."""
+        replays = self._read_replays_file()
+        return replays[-1] if replays else None
+
+    def save_replay(self, replay: dict[str, object]) -> None:
+        """Append a finished game's replay (seed + timestamped input log)
+        to the replay log, keeping the ``MAX_REPLAYS`` most recent.
+        Failures are swallowed — replays are a convenience, not state."""
+        replays = self._read_replays_file()
+        replays.append(replay)
+        _write_json_atomic(self.path.parent / REPLAYS_FILE, replays[-MAX_REPLAYS:])
+        # Our own write invalidates the display cache: the next replays()
+        # re-reads the authoritative (trimmed) file.
+        self._replays = None
 
 
 # Back-compat alias for the historical score-only class name.
@@ -268,5 +304,7 @@ __all__ = [
     "REPLAYS_FILE",
     "GameState",
     "HighScores",
+    "as_int",
+    "as_number",
     "default_state_path",
 ]

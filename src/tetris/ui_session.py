@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from .engine import DANGER_TOP_ROWS, Event, Tetris
 from .pieces import BOARD_H, BOARD_W
 from .settings import OPTIONS, cycle, value_of
-from .state import MAX_NAME, GameState
+from .state import MAX_NAME, GameState, as_int, as_number
 from .ui_input import KEY_ESCAPE, KeyReader
 from .ui_render import (
     BOARD_INNER_W,
@@ -195,15 +195,17 @@ class ReplayController:
         if not 0 <= index < len(replays):
             return False
         data = replays[index]
-        raw_seed = data.get("seed")
-        raw_level = data.get("start_level")
-        if not isinstance(raw_seed, int) or not isinstance(raw_level, int):
+        # -1 = missing/malformed (bools included): a saved seed/level is
+        # always a non-negative int, so anything else is corrupt data.
+        seed = as_int(data.get("seed"), -1)
+        level = as_int(data.get("start_level"), -1)
+        if seed < 0 or level < 0:
             return False
         self.payload = data
         self.original = session.engine
         self.engine = session.tetris_cls(
-            rng=random.Random(raw_seed),
-            start_level=raw_level,
+            rng=random.Random(seed),
+            start_level=level,
             sprint=bool(data.get("sprint", False)),
         )
         session.engine = self.engine
@@ -214,12 +216,12 @@ class ReplayController:
         self._stop_seq = 0
         # The replay must use the original game's input timing, and must
         # not inherit a held key or a rotate cooldown from the live game.
-        raw_das = data.get("das")
-        raw_arr = data.get("arr")
-        if isinstance(raw_das, (int, float)) and not isinstance(raw_das, bool):
-            session.reader.das = float(raw_das)
-        if isinstance(raw_arr, (int, float)) and not isinstance(raw_arr, bool):
-            session.reader.arr = float(raw_arr)
+        das = as_number(data.get("das"))
+        if das is not None:
+            session.reader.das = das
+        arr = as_number(data.get("arr"))
+        if arr is not None:
+            session.reader.arr = arr
         session.reader.reset()
         session.effects.clear()
         return True

@@ -15,7 +15,7 @@ from . import __version__
 from .engine import SPRINT_LINES, Tetris
 from .pieces import BOARD_H, BOARD_W, PIECES
 from .settings import OPTIONS, Settings, format_value, value_of
-from .state import GameState
+from .state import GameState, as_int, as_number
 from .stats import format_time, panel_stats
 from .themes import DEFAULT_THEME, THEMES
 
@@ -291,10 +291,8 @@ def build_replays_modal(state: GameState) -> Modal:
     else:
         lines = [f"{'#':>1}  {'SCORE':>8}{'LINES':>6}  {'MODE':<7}  DATE"]
         for i, rp in enumerate(replays, start=1):
-            score = rp.get("score")
-            score = score if isinstance(score, int) and not isinstance(score, bool) else 0
-            lines_c = rp.get("lines")
-            lines_c = lines_c if isinstance(lines_c, int) and not isinstance(lines_c, bool) else 0
+            score = as_int(rp.get("score"))
+            lines_c = as_int(rp.get("lines"))
             mode = "sprint" if rp.get("sprint") else "classic"
             date = str(rp.get("date") or "")[:16]
             lines.append(f"{i:>1}  {score:>8,}{lines_c:>6}  {mode:<7}  {date}")
@@ -391,16 +389,10 @@ def build_scores_modal(state: GameState) -> Modal:
     ]
     for i, entry in enumerate(state.entries[:10], start=1):
         name = str(entry.get("name") or "").strip() or "—"
-        score = entry.get("score")
-        score = score if isinstance(score, int) and not isinstance(score, bool) else 0
-        level = entry.get("level")
-        level = level if isinstance(level, int) and not isinstance(level, bool) else 0
-        t = entry.get("time")
-        t_str = (
-            format_time(float(t))
-            if isinstance(t, (int, float)) and not isinstance(t, bool)
-            else "—"
-        )
+        score = as_int(entry.get("score"))
+        level = as_int(entry.get("level"))
+        t = as_number(entry.get("time"))
+        t_str = format_time(t) if t is not None else "—"
         date = str(entry.get("date") or "")[:10]
         lines.append(f"{i:>2}  {name:<10}{score:>9,}{level:>4}{t_str:>6}  {date}")
     if not state.entries:
