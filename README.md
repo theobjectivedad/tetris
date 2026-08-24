@@ -10,8 +10,7 @@ you need is `just run` and a 60×27 terminal.
 > language model running at 4-bit NVFP4 precision on **two DGX Spark
 > workstations**, driven by the Pi coding-agent harness. No human wrote
 > the code. The model planned the game, implemented all 30 feature
-> items, burned down a 9-step refactor pass, and kept a full build
-> log: see [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md).
+> items, and burned down a 9-step refactor pass.
 
 ## Quick start
 
