@@ -441,3 +441,32 @@ def test_hold_flash_on_accepted_hold(monkeypatch, tmp_path) -> None:
     scr.keys.append(ord("c"))
     s.on_frame(scr, 1.2)
     assert s.effects.hold_flash_until == before
+
+
+# ---------------------------------------------------------------------------
+# P30: rotation flash
+# ---------------------------------------------------------------------------
+
+
+def test_rotate_flash_on_successful_rotation(monkeypatch, tmp_path) -> None:
+    """A successful rotation opens the P30 flash window and the frame
+    draws the piece in the highlight accent (bold on this monochrome
+    session); a rejected rotation opens no window and flashes nothing."""
+    s = _session(monkeypatch, tmp_path)
+    s.last_seq = s.engine.spawn_seq  # no spawn glide: the piece is drawn
+    s.anim_start = None
+    scr = FakeScreen()
+    scr.keys.append(curses.KEY_UP)
+    s.on_frame(scr, 1.0)
+    assert s.effects.rotate_flash_until == pytest.approx(1.0 + 0.1)
+    assert any(a & curses.A_BOLD for a in scr.grid_attr.values())
+
+    s2 = _session(monkeypatch, tmp_path)
+    s2.last_seq = s2.engine.spawn_seq
+    s2.anim_start = None
+    s2.engine.rotate = lambda d=1, now=None: False  # a rejected rotation
+    scr2 = FakeScreen()
+    scr2.keys.append(curses.KEY_UP)
+    s2.on_frame(scr2, 1.0)
+    assert s2.effects.rotate_flash_until == 0.0
+    assert not any(a & curses.A_BOLD for a in scr2.grid_attr.values())

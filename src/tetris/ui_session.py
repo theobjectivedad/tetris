@@ -555,15 +555,21 @@ class Session:
             elif key == curses.KEY_UP:
                 if self.reader.allow_rotate(now):
                     self.log_action("U")
-                    self.engine.rotate(1, now)
+                    # P30: a successful rotation highlights the piece for
+                    # ROTATE_FLASH_SECONDS — a small click that makes it
+                    # feel crisp.
+                    if self.engine.rotate(1, now):
+                        self.effects.rotate_flash_until = now + ROTATE_FLASH_SECONDS
             elif key in (ord("z"), ord("Z")):
                 if self.reader.allow_rotate(now):
                     self.log_action("Z")
-                    self.engine.rotate(-1, now)
+                    if self.engine.rotate(-1, now):
+                        self.effects.rotate_flash_until = now + ROTATE_FLASH_SECONDS
             elif key in (ord("x"), ord("X")):
                 if self.reader.allow_rotate(now):
                     self.log_action("X")
-                    self.engine.rotate_180(now)
+                    if self.engine.rotate_180(now):
+                        self.effects.rotate_flash_until = now + ROTATE_FLASH_SECONDS
             elif key == curses.KEY_DOWN:
                 # P14: one cell per fresh press; while held, the stream in
                 # _stream_held_input drops at the fixed SOFT_DROP_RATE
@@ -919,6 +925,7 @@ class Session:
             stdscr, self.engine, bx + ox, by + oy,
             show_ghost=self.state.settings.ghost, hide_live=glide_frac is not None,
             lock_cells=lock_cells, pulse_dim=pulse_dim, danger=danger,
+            rotate_flash=now < self.effects.rotate_flash_until,
         )
 
         # Floating score text, drifting up out of the board.
