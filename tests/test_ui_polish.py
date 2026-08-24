@@ -22,8 +22,8 @@ spec, so any change to modal navigation, name entry, or the builder row
 formats must keep them passing.
 
 The ``build_*`` functions are imported inside the unit tests that need
-them (through the ``tetris.main`` re-exports) so the game_loop-driven
-tests still collect.
+them (from their canonical home, ``tetris.ui_render``) so the
+game_loop-driven tests still collect.
 """
 
 import json
@@ -235,7 +235,7 @@ def test_build_scores_modal_row_format(tmp_path) -> None:
     """build_scores_modal: exact header and row formats — 45-char entry
     rows (P21: TIME column) in score-desc order, em dash for an empty
     name or a legacy entry without a time, blank + footer."""
-    from tetris.main import build_scores_modal
+    from tetris.ui_render import build_scores_modal
 
     path = tmp_path / "state.json"
     entries = [
@@ -441,7 +441,7 @@ def test_no_name_entry_for_unranked_score(monkeypatch, tmp_path) -> None:
 def test_settings_rows_fixed_width() -> None:
     """build_settings_modal: the nine option rows are exactly 22 chars with
     the value right-aligned in the last 8 columns; blank + ESC footer."""
-    from tetris.main import build_settings_modal
+    from tetris.ui_render import build_settings_modal
 
     m = build_settings_modal(Settings(), 0)
     assert m.title == "SETTINGS"
@@ -459,7 +459,7 @@ def test_settings_rows_fixed_width() -> None:
 def test_help_modal_content() -> None:
     """build_help_modal: the key legend, the SCORING reference section, and
     the version line — every row within 35 chars, 32-dash separators."""
-    from tetris.main import build_help_modal
+    from tetris.ui_render import build_help_modal
 
     m = build_help_modal()
     assert m.title == "HELP"
@@ -475,7 +475,7 @@ def test_help_modal_content() -> None:
 def test_game_over_modal_lines() -> None:
     """build_game_over_modal: fixed Score/Lines/Pieces rows, the rank/name
     row variants, and the Best row only for an unranked game."""
-    from tetris.main import build_game_over_modal
+    from tetris.ui_render import build_game_over_modal
 
     t = main.Tetris()
     t.score = 1234
@@ -505,7 +505,7 @@ def test_game_over_modal_shows_seed_and_replay_hint() -> None:
     'G replay last game' hint; in name-entry mode there is no G hint
     (G is a typed name character there)."""
     from tetris.engine import Tetris
-    from tetris.main import build_game_over_modal
+    from tetris.ui_render import build_game_over_modal
 
     t = Tetris(rng=random.Random(5))
     settled = build_game_over_modal(t, 0, None, seed=12345)
@@ -523,7 +523,7 @@ def test_keyreader_honors_custom_das_arr() -> None:
     """P4: KeyReader streams with the live DAS/ARR values (settings), not
     frozen module constants — simulated held-key input, no curses.
     """
-    from tetris.main import ARR, DAS, KeyReader
+    from tetris.ui_input import ARR, DAS, KeyReader
 
     # Defaults preserve the classic feel.
     assert KeyReader().das == DAS
@@ -559,7 +559,7 @@ def test_game_over_modal_shows_time_and_best_combo() -> None:
     """P7: the game-over modal reports the game's time (M:SS) and, when
     any combo occurred, the best combo of the run."""
     from tetris.engine import Tetris
-    from tetris.main import build_game_over_modal
+    from tetris.ui_render import build_game_over_modal
 
     t = Tetris(rng=random.Random(7))
     t.play_time = 225.4  # 3:45

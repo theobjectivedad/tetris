@@ -22,27 +22,10 @@ from __future__ import annotations
 import curses
 import time
 
-from .engine import Event, Tetris
-from .pieces import BOARD_H, BOARD_W, PIECES
-from .ui_input import ARR, DAS, KeyReader
-from .ui_render import (
-    ATTRS,
-    BG_PAIR,
-    NEED_H,
-    NEED_W,
-    Modal,
-    build_attrs,
-    build_game_over_modal,
-    build_help_modal,
-    build_pause_modal,
-    build_scores_modal,
-    build_settings_modal,
-    build_sprint_modal,
-    draw_board,
-    draw_box,
-    init_colors,
-)
-from .ui_session import Effects, Session
+from .engine import Tetris
+from .pieces import BOARD_H
+from .ui_render import build_attrs, draw_board
+from .ui_session import Session
 
 FRAME = 0.02          # main loop frame time (50 fps)
 
@@ -82,34 +65,18 @@ if __name__ == "__main__":
     main()
 
 
+# Hard contract (AGENTS.md): the UI tests monkeypatch main.Tetris / main.time
+# and drive main.game_loop with a fake clock; the rest of the re-exports were
+# removed in R8 — tests import the modal builders, KeyReader, and the attr
+# seam (ATTRS) from their canonical modules (tetris.ui_render / ui_input).
 __all__ = [
-    "ARR",
-    "ATTRS",
-    "BG_PAIR",
     "BOARD_H",
-    "BOARD_W",
-    "DAS",
     "FRAME",
-    "NEED_H",
-    "NEED_W",
-    "PIECES",
-    "Effects",
-    "Event",
-    "KeyReader",
-    "Modal",
     "Tetris",
     "build_attrs",
-    "build_game_over_modal",
-    "build_help_modal",
-    "build_pause_modal",
-    "build_scores_modal",
-    "build_settings_modal",
-    "build_sprint_modal",
     "curses",
     "draw_board",
-    "draw_box",
     "game_loop",
-    "init_colors",
     "main",
     "time",
 ]

@@ -584,7 +584,7 @@ def test_pre_das_repeat_does_not_prime_a_false_hold() -> None:
     did, the hold would extend past the DAS delay and ``auto_direction``
     would stream a second cell the user never asked for.
     """
-    from tetris.main import KeyReader
+    from tetris.ui_input import KeyReader
 
     r = KeyReader()  # defaults: das=0.17, arr=0.04, HOLD_WINDOW=0.06
     # Fresh press at t=1.0: one immediate move.
@@ -604,7 +604,7 @@ def test_post_das_repeat_still_streams() -> None:
     """Counterpart guard: a repeat that arrives AFTER DAS has elapsed is a
     real hold and must keep the piece streaming (we must not have over-
     corrected the tap fix into breaking held-key streaming)."""
-    from tetris.main import KeyReader
+    from tetris.ui_input import KeyReader
 
     r = KeyReader()  # das=0.17, arr=0.04
     assert r.on_direction(1, 1.0)  # tap
@@ -867,10 +867,12 @@ def test_bg_panel_attr_on_board_and_boxes(monkeypatch) -> None:
     the board border keeps its own attr."""
     import curses
 
+    from tetris.ui_render import ATTRS, BG_PAIR, draw_box
+
     monkeypatch.setattr(curses, "has_colors", lambda: True)
     monkeypatch.setattr(curses, "color_pair", lambda pair: 0x100 * pair)
     main.build_attrs()  # the render path uses the cached attrs
-    bg = 0x100 * main.BG_PAIR
+    bg = 0x100 * BG_PAIR
 
     scr = FakeScreen()
     main.draw_board(scr, main.Tetris(), 20, 6)
@@ -878,8 +880,8 @@ def test_bg_panel_attr_on_board_and_boxes(monkeypatch) -> None:
     assert scr.grid_attr[(6 + 10, 20 + 1)] == bg
     assert scr.grid_attr[(6 + 19, 20 + 19)] == bg
     # The top border row keeps the border attr, not the bg fill.
-    assert scr.grid_attr[(6, 20)] == main.ATTRS.border
+    assert scr.grid_attr[(6, 20)] == ATTRS.border
 
-    main.draw_box(scr, "HOLD", 46, 6, 14, 6)
+    draw_box(scr, "HOLD", 46, 6, 14, 6)
     # Box interior (row by+2, first inner col) carries the bg attr.
     assert scr.grid_attr[(8, 47)] == bg

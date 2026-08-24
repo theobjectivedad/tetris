@@ -54,12 +54,24 @@ state.GameState ◀──▶ state.json on disk (scores, settings, sprint best, 
 
 Breaking any of these silently breaks the test suite or the MCP parser:
 
-- `main.py` keeps `Tetris`, `time`, `curses`, `game_loop`, `build_attrs`,
-  `draw_board`, and `BOARD_H` as module-level names — UI tests monkeypatch
-  `main.Tetris` / `main.time` with `monkeypatch.setattr`. The frame loop reads
-  the clock through module-level `time` on purpose (fake clock in tests).
+- `main.py` keeps exactly `Tetris`, `time`, `curses`, `game_loop`,
+  `build_attrs`, `draw_board`, and `BOARD_H` as the module-level monkeypatch
+  contract (plus `FRAME` and `main`) — UI tests monkeypatch `main.Tetris` /
+  `main.time` with `monkeypatch.setattr` and drive `main.game_loop` with a
+  fake clock (the frame loop reads the clock through module-level `time`
+  on purpose). Tests import everything else from its canonical module:
+  modal builders / `ATTRS` / `draw_box` / `BG_PAIR` from `tetris.ui_render`,
+  `KeyReader` / `ARR` / `DAS` from `tetris.ui_input`.
+- `ui_render.ATTRS` — the module-level `AttrCache` singleton is the render-
+  attr patch seam (tests patch fields such as `ATTRS.danger`);
+  `init_colors`/`build_attrs` fill it. There are no rebinding attr globals
+  to import.
 - `Tetris.__init__(rng=..., start_level=..., sprint=...)` kwarg names —
   tests subclass the engine and pass these.
+- `engine.Event`'s additive optional fields (`lines`, `combo`, `b2b`) —
+  the engine stamps post-commit combo/b2b at scoring time and the UI's
+  COMBO/B2B floaters read the event snapshot; tests construct events with
+  keyword args, so fields stay append-only with defaults.
 - `stats.STAT_LABELS` — the UI renders exactly these labels and the MCP
   parser (`mcp/server.py`) looks for exactly these; change both sides together.
 - `Tetris.snapshot()` is the single source of the sidebar stat values.

@@ -103,7 +103,7 @@ def test_classic_never_wins() -> None:
 
 
 def test_sprint_modal_win() -> None:
-    from tetris.main import build_sprint_modal
+    from tetris.ui_render import build_sprint_modal
 
     t = Tetris(sprint=True)
     t.won = True
@@ -120,7 +120,7 @@ def test_sprint_modal_win() -> None:
 
 
 def test_sprint_modal_loss() -> None:
-    from tetris.main import build_sprint_modal
+    from tetris.ui_render import build_sprint_modal
 
     t = Tetris(sprint=True)
     t.won = False
