@@ -57,8 +57,9 @@ The board auto-centers itself; if your terminal is smaller than
 × your level, with bonuses stacked on top: **combos** (+50 × combo ×
 level for consecutive clears), **back-to-back** (1.5× for a Tetris or
 a multi-line T-spin following another one), and soft/hard drop points.
-**T-spins** score 100/400 with no lines, 200/800/1200/1600 by lines
-cleared — all × level — and are counted in the SPINS stat. You level
+**T-spins** score 100/400 with no lines, 200/800 (mini/full) for one line,
+1200 for two, and 1600 for three — all × level — and are counted in the
+SPINS stat. You level
 up every 10 lines, and gravity speeds up with each level.
 
 ## Game modes
